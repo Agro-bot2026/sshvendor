@@ -1,0 +1,22 @@
+# Credenciales de Ualá (las pone cada cliente)
+uala-credenciales.json
+mi-numero.txt
+
+# Licencia e instalación local
+.license
+.apibase
+
+# Bases de datos
+*.db
+*.db.bak*
+
+# Node / Python
+node_modules/
+__pycache__/
+*.pyc
+venv/
+
+# Logs y datos de ventas locales
+*.log
+ventas.json
+clientes.json

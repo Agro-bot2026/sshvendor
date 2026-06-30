@@ -1,0 +1,36 @@
+{
+  "negocio": "Mi Servicio SSH",
+  "moneda": "$",
+  "modo": "datos",
+  "planes": [
+    {
+      "id": 1,
+      "nombre": "10 GB",
+      "gb": 10,
+      "precio": 2500
+    },
+    {
+      "id": 2,
+      "nombre": "25 GB",
+      "gb": 25,
+      "precio": 5000
+    },
+    {
+      "id": 3,
+      "nombre": "50 GB",
+      "gb": 50,
+      "precio": 8000
+    },
+    {
+      "id": 4,
+      "nombre": "100 GB",
+      "gb": 100,
+      "precio": 13000
+    }
+  ],
+  "dias_cuenta": 30,
+  "admrufu_socket": "/tmp/admAPI.sock",
+  "conexiones_por_cuenta": 1,
+  "mensaje_bienvenida": "¡Hola! 👋 Bienvenido. Escribí *comprar* para ver los planes de datos disponibles.",
+  "usar_hwid": false
+}
