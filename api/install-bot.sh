@@ -32,6 +32,19 @@ echo ""
 read -p "  Username: " UALA_USER < /dev/tty
 read -p "  Client ID: " UALA_CID < /dev/tty
 read -p "  Client Secret: " UALA_SECRET < /dev/tty
+echo ""
+echo ""
+echo "  =========================================="
+echo "  NUMERO DE ADMINISTRADOR"
+echo "  =========================================="
+echo "  Ingresa TU numero personal de WhatsApp (NO el del bot)."
+echo "  Es el numero desde el que vas a manejar el bot y cambiar"
+echo "  precios, dias, etc. escribiendole comandos al bot."
+echo "  Formato: codigo de pais + numero, sin espacios ni signos."
+echo "  Ejemplo: 54911XXXXXXXX"
+echo ""
+read -p "  Tu numero personal de WhatsApp (admin): " ADMIN_NUM < /dev/tty
+echo "$ADMIN_NUM" > /opt/sshvendor-bot/admin.txt
 
 cat > uala-credenciales.json <<UALACRED
 {
@@ -263,7 +276,7 @@ UALAEOF
 cat > index.js <<'INDEXEOF'
 const fs = require('fs'), path = require('path');
 const guard = require('./guard');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
@@ -443,8 +456,110 @@ async function main() {
       const jid = msg.key.remoteJid;
       if (jid.endsWith('@g.us')) return;
       const texto = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
+      // ===== SUBIDA DE ARCHIVOS .HC (solo admin) =====
+      const docMsg = msg.message.documentMessage || msg.message.documentWithCaptionMessage?.message?.documentMessage;
+      if (docMsg) {
+        let ADMIN_NUM_D = '';
+        try { ADMIN_NUM_D = fs.readFileSync(__dirname + '/admin.txt', 'utf8').trim(); } catch(e) {}
+        const numRem_D = (msg.key.senderPn || jid).split('@')[0].split(':')[0];
+        if (ADMIN_NUM_D && numRem_D === ADMIN_NUM_D) {
+          const nombreArch = docMsg.fileName || ('archivo_' + Date.now() + '.hc');
+          if (nombreArch.toLowerCase().endsWith('.hc')) {
+            try {
+              const buffer = await downloadMediaMessage(msg, 'buffer', {});
+              if (!fs.existsSync(__dirname + '/hc_files')) fs.mkdirSync(__dirname + '/hc_files');
+              fs.writeFileSync(__dirname + '/hc_files/' + nombreArch, buffer);
+              await sock.sendMessage(jid, { text: `✅ Archivo *${nombreArch}* guardado. Los compradores lo reciben con /hc` });
+            } catch(e) {
+              await sock.sendMessage(jid, { text: '❌ Error guardando el archivo: ' + e.message });
+            }
+          } else {
+            await sock.sendMessage(jid, { text: '⚠️ Solo se aceptan archivos .hc' });
+          }
+          return;
+        }
+      }
       if (!texto) return;
       const t = texto.toLowerCase();
+      // ===== COMANDOS DE CONFIGURACION (solo el dueño/admin) =====
+      let ADMIN_NUM = '';
+      try { ADMIN_NUM = fs.readFileSync(__dirname + '/admin.txt', 'utf8').trim(); } catch(e) {}
+      const numRemitente = (msg.key.senderPn || jid).split('@')[0].split(':')[0];
+      const esAdmin = ADMIN_NUM && numRemitente === ADMIN_NUM;
+      if (esAdmin && t.startsWith('/') && t !== '/hc') {
+        function guardarConfig() { fs.writeFileSync(__dirname + '/config.json', JSON.stringify(CFG, null, 2)); }
+        if (t === '/config' || t === '/admin' || t === '/ayuda') {
+          let txt = '⚙️ *PANEL DE CONFIGURACION*\n\n';
+          txt += `🏪 Negocio: *${CFG.negocio}*\n`;
+          txt += `📅 Dias por cuenta: *${CFG.dias_cuenta}*\n`;
+          txt += `🔌 Conexiones: *${CFG.conexiones_por_cuenta}*\n\n`;
+          txt += '📦 *PLANES:*\n';
+          CFG.planes.forEach(p => { txt += `  *${p.id}.* ${p.nombre} — ${CFG.moneda}${p.precio}\n`; });
+          txt += '\n📝 *COMANDOS:*\n';
+          txt += '`/precio [id] [valor]`\n`/nombre [id] [texto]`\n`/dias [numero]`\n`/negocio [texto]`\n`/mensaje [texto]`\n';
+          await sock.sendMessage(jid, { text: txt });
+          return;
+        }
+        if (t.startsWith('/precio')) {
+          const p = texto.split(/\s+/); const plan = planPorId(p[1]); const v = parseInt(p[2]);
+          if (!plan || isNaN(v)) { await sock.sendMessage(jid, { text: '❌ Uso: /precio [id] [valor]\nEj: /precio 1 3000' }); return; }
+          plan.precio = v; guardarConfig();
+          await sock.sendMessage(jid, { text: `✅ Precio de *${plan.nombre}* ahora es ${CFG.moneda}${v}` }); return;
+        }
+        if (t.startsWith('/nombre')) {
+          const p = texto.split(/\s+/); const plan = planPorId(p[1]); const nom = p.slice(2).join(' ');
+          if (!plan || !nom) { await sock.sendMessage(jid, { text: '❌ Uso: /nombre [id] [texto]' }); return; }
+          plan.nombre = nom; guardarConfig();
+          await sock.sendMessage(jid, { text: `✅ Nombre del plan ${p[1]} ahora es *${nom}*` }); return;
+        }
+        if (t.startsWith('/dias')) {
+          const p = texto.split(/\s+/); const d = parseInt(p[1]);
+          if (isNaN(d)) { await sock.sendMessage(jid, { text: '❌ Uso: /dias [numero]' }); return; }
+          CFG.dias_cuenta = d; guardarConfig();
+          await sock.sendMessage(jid, { text: `✅ Dias por cuenta ahora es *${d}*` }); return;
+        }
+        if (t.startsWith('/negocio')) {
+          const nv = texto.split(/\s+/).slice(1).join(' ');
+          if (!nv) { await sock.sendMessage(jid, { text: '❌ Uso: /negocio [texto]' }); return; }
+          CFG.negocio = nv; guardarConfig();
+          await sock.sendMessage(jid, { text: `✅ Negocio ahora es *${nv}*` }); return;
+        }
+        if (t.startsWith('/mensaje')) {
+          const nv = texto.split(/\s+/).slice(1).join(' ');
+          if (!nv) { await sock.sendMessage(jid, { text: '❌ Uso: /mensaje [texto]' }); return; }
+          CFG.mensaje_bienvenida = nv; guardarConfig();
+          await sock.sendMessage(jid, { text: `✅ Mensaje de bienvenida actualizado` }); return;
+        }
+        if (t === '/borrarhc') {
+          try {
+            const dir = __dirname + '/hc_files';
+            let n = 0;
+            if (fs.existsSync(dir)) { for (const f of fs.readdirSync(dir)) { fs.unlinkSync(dir + '/' + f); n++; } }
+            await sock.sendMessage(jid, { text: `🗑️ Se borraron ${n} archivo(s) .hc. Ya podés subir los nuevos.` });
+          } catch(e) { await sock.sendMessage(jid, { text: '❌ Error al borrar: ' + e.message }); }
+          return;
+        }
+        await sock.sendMessage(jid, { text: 'Comando no reconocido. Escribí /config para ver opciones.' }); return;
+      }
+      // ===== FIN COMANDOS ADMIN =====
+      // ===== /hc PUBLICO (cualquiera puede pedirlo) =====
+      if (t === '/hc') {
+        const dir = __dirname + '/hc_files';
+        let archivos = [];
+        try { if (fs.existsSync(dir)) archivos = fs.readdirSync(dir).filter(f => f.toLowerCase().endsWith('.hc')); } catch(e) {}
+        if (archivos.length === 0) {
+          await sock.sendMessage(jid, { text: 'ℹ️ Todavía no hay archivos de configuración disponibles.' });
+          return;
+        }
+        await sock.sendMessage(jid, { text: `📲 Te envío ${archivos.length} archivo(s) de configuración:` });
+        for (const nombre of archivos) {
+          try {
+            const contenido = fs.readFileSync(dir + '/' + nombre);
+            await sock.sendMessage(jid, { document: contenido, fileName: nombre, mimetype: 'application/octet-stream' });
+          } catch(e) {}
+        }
+        return;
+      }
 
       if (t === 'hola' || t === 'menu' || t === 'comprar' || t === 'inicio' || t === 'recargar') {
         sesiones[jid] = { paso: 'eligiendo' };
@@ -526,6 +641,8 @@ if [ "$1" = "reset" ]; then rm -rf "$BOT_DIR/auth"; echo "Sesion borrada, se gen
 if [ "$1" = "update" ]; then
   TOK=$(cat "$BOT_DIR/.license"); APIB=$(cat "$BOT_DIR/.apibase")
   cp "$BOT_DIR/config.json" /tmp/config_cliente.json 2>/dev/null
+  cp "$BOT_DIR/admin.txt" /tmp/admin_cliente.txt 2>/dev/null
+  rm -rf /tmp/hc_files_cliente 2>/dev/null; cp -r "$BOT_DIR/hc_files" /tmp/hc_files_cliente 2>/dev/null
   pm2 stop sshvendor-bot 2>/dev/null
   bash <(curl -s "$APIB/install/$TOK")
   if [ -f /tmp/config_cliente.json ]; then
@@ -537,6 +654,8 @@ if [ "$1" = "update" ]; then
       fs.writeFileSync('$BOT_DIR/config.json', JSON.stringify(final,null,2));
     " 2>/dev/null && echo "Configuracion del cliente conservada."
   fi
+  [ -f /tmp/admin_cliente.txt ] && cp /tmp/admin_cliente.txt "$BOT_DIR/admin.txt" && echo "Numero de admin conservado."
+  [ -d /tmp/hc_files_cliente ] && rm -rf "$BOT_DIR/hc_files" && cp -r /tmp/hc_files_cliente "$BOT_DIR/hc_files" && echo "Archivos .hc conservados."
   pm2 start "$BOT_DIR/index.js" --name sshvendor-bot 2>/dev/null && pm2 save
   exit 0
 fi

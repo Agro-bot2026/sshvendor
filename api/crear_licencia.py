@@ -4,7 +4,7 @@ import models
 
 # Cambiá esto por la dirección pública de tu servidor central cuando tengas dominio.
 # Por ahora, si el cliente instala desde internet, necesitás la IP pública del VPS:
-API_BASE = "http://93.127.139.4:10058"
+API_BASE = "https://licencias.charly-tricks.dev"
 
 db = SessionLocal()
 print("=== GENERAR LICENCIA - BOT VENDEDOR DE SSH ===\n")
@@ -27,6 +27,8 @@ print("="*50)
 print(f"Cliente: {cliente}")
 print(f"IP:      {ip or '(se fija en la primera instalacion)'}")
 print(f"Token:   {token}")
-print("\n--- COMANDO PARA PASARLE AL CLIENTE ---\n")
+print("\n--- LINK PARA PASARLE AL CLIENTE (se ve lindo en WhatsApp) ---\n")
+print(f"{API_BASE}/i/{token}")
+print("\n--- (o el comando directo, si lo necesitas) ---")
 print(f"bash <(curl -s {API_BASE}/install/{token})")
 print("\n" + "="*50)
