@@ -44,6 +44,7 @@ echo "  Formato: codigo de pais + numero, sin espacios ni signos."
 echo "  Ejemplo: 54911XXXXXXXX"
 echo ""
 read -p "  Tu numero personal de WhatsApp (admin): " ADMIN_NUM < /dev/tty
+ADMIN_NUM=$(echo "$ADMIN_NUM" | tr -cd "0-9")
 echo "$ADMIN_NUM" > /opt/sshvendor-bot/admin.txt
 
 cat > uala-credenciales.json <<UALACRED
@@ -675,7 +676,7 @@ if [ "$1" = "hwid" ]; then
   fi
   exit 0
 fi
-if [ "$1" = "fondo" ]; then pm2 start index.js --name sshvendor-bot && pm2 save; exit 0; fi
+if [ "$1" = "fondo" ]; then pm2 start index.js --name sshvendor-bot && pm2 save && pm2 startup systemd -u root --hp /root >/dev/null 2>&1; exit 0; fi
 if [ "$1" = "stop" ]; then pm2 stop sshvendor-bot; exit 0; fi
 if [ "$1" = "logs" ]; then pm2 logs sshvendor-bot; exit 0; fi
 exec node index.js
