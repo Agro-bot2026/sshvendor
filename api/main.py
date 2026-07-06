@@ -1,13 +1,30 @@
 from fastapi import FastAPI, Request, Depends, HTTPException
-from fastapi.responses import PlainTextResponse, HTMLResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
 from database import get_db, init_db
 import models
+import os, secrets
 
 app = FastAPI(title="SSH Vendor - Central")
 
 init_db()
+
+def _cargar_panel_pass():
+    try:
+        with open(os.path.join(os.path.dirname(__file__), '.env.panel')) as f:
+            for linea in f:
+                if linea.startswith('PANEL_PASSWORD='):
+                    return linea.strip().split('=', 1)[1]
+    except: pass
+    return None
+PANEL_PASS = _cargar_panel_pass()
+
+def check_panel_auth(request):
+    clave = request.headers.get("x-panel-key") or request.query_params.get("key")
+    if not PANEL_PASS or clave != PANEL_PASS:
+        raise HTTPException(401, "No autorizado")
+    return True
 
 def client_ip(req: Request):
     fwd = req.headers.get("x-forwarded-for")
@@ -141,3 +158,70 @@ function copiar(){{
 </script>
 </body>
 </html>"""
+
+
+# ==================== PANEL DE LICENCIAS ====================
+
+@app.get("/panel/api/licencias")
+def panel_listar(request: Request, db: Session = Depends(get_db)):
+    check_panel_auth(request)
+    lics = db.query(models.Licencia).order_by(models.Licencia.created_at.desc()).all()
+    resultado = []
+    for l in lics:
+        resultado.append({
+            "id": l.id,
+            "token": l.token,
+            "cliente": l.cliente or "",
+            "ip_bound": l.ip_bound or "",
+            "status": l.status,
+            "bot_version": l.bot_version or "",
+            "last_seen": l.last_seen.isoformat() if l.last_seen else None,
+            "created_at": l.created_at.isoformat() if l.created_at else None,
+        })
+    activas = sum(1 for l in lics if l.status == "active")
+    revocadas = sum(1 for l in lics if l.status == "revoked")
+    return {"licencias": resultado, "total": len(lics), "activas": activas, "revocadas": revocadas}
+
+@app.post("/panel/api/revocar/{token}")
+def panel_revocar(token: str, request: Request, db: Session = Depends(get_db)):
+    check_panel_auth(request)
+    lic = db.query(models.Licencia).filter(models.Licencia.token == token).first()
+    if not lic: raise HTTPException(404, "No existe")
+    lic.status = "revoked"
+    db.commit()
+    return {"ok": True, "status": "revoked"}
+
+@app.post("/panel/api/activar/{token}")
+def panel_activar(token: str, request: Request, db: Session = Depends(get_db)):
+    check_panel_auth(request)
+    lic = db.query(models.Licencia).filter(models.Licencia.token == token).first()
+    if not lic: raise HTTPException(404, "No existe")
+    lic.status = "active"
+    db.commit()
+    return {"ok": True, "status": "active"}
+
+@app.delete("/panel/api/borrar/{token}")
+def panel_borrar(token: str, request: Request, db: Session = Depends(get_db)):
+    check_panel_auth(request)
+    lic = db.query(models.Licencia).filter(models.Licencia.token == token).first()
+    if not lic: raise HTTPException(404, "No existe")
+    db.delete(lic)
+    db.commit()
+    return {"ok": True}
+
+@app.post("/panel/api/crear")
+def panel_crear(request: Request, cliente: str = "", db: Session = Depends(get_db)):
+    check_panel_auth(request)
+    token = secrets.token_hex(16)
+    lic = models.Licencia(token=token, cliente=cliente, status="active")
+    db.add(lic)
+    db.commit()
+    return {"ok": True, "token": token, "cliente": cliente}
+
+
+@app.get("/panel", response_class=HTMLResponse)
+def panel_home():
+    try:
+        return open("/opt/sshvendor/panel.html").read()
+    except:
+        raise HTTPException(500, "Panel no disponible")

@@ -121,6 +121,12 @@ module.exports=async function guard(){
     if(!r.data.ok){console.error('❌ Licencia no válida:',r.data.reason);process.exit(1);}
     console.log('✅ Licencia válida');
   }catch(e){console.error('❌ No se pudo validar la licencia:',e.message);process.exit(1);}
+  setInterval(async function(){
+    try{
+      const rr=await axios.get(`${api}/api/validate/${token}?v=${BOT_VERSION}`,{timeout:10000});
+      if(!rr.data.ok){process.exit(1);}
+    }catch(e){}
+  }, 60*60*1000);
 };
 GUARDEOF
 

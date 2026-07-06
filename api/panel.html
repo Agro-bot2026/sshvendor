@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel de Licencias - SSH Vendor</title>
+<style>
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  :root{ --bg:#0a0f1e; --card:#141c30; --border:#22304a; --green:#00ff9d; --red:#ef4444; --txt:#e2e8f0; --dim:#8899aa; }
+  body{ font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--txt); min-height:100vh; }
+  /* Login */
+  #login{ display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
+  #login h1{ color:var(--green); font-size:24px; margin-bottom:8px; }
+  #login p{ color:var(--dim); margin-bottom:24px; font-size:14px; }
+  #login input{ width:100%; max-width:320px; padding:14px; border-radius:10px; border:1px solid var(--border); background:var(--card); color:var(--txt); font-size:16px; margin-bottom:12px; }
+  #login button{ width:100%; max-width:320px; padding:14px; border-radius:10px; border:none; background:var(--green); color:#04120c; font-size:16px; font-weight:bold; cursor:pointer; }
+  #login .err{ color:var(--red); font-size:13px; margin-top:10px; height:18px; }
+  /* Panel */
+  #panel{ display:none; padding:16px; max-width:1100px; margin:0 auto; }
+  .top{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--border); }
+  .top h1{ color:var(--green); font-size:20px; }
+  .top .actions{ display:flex; gap:8px; }
+  .btn{ padding:10px 16px; border-radius:8px; border:none; font-size:13px; font-weight:600; cursor:pointer; }
+  .btn-green{ background:var(--green); color:#04120c; }
+  .btn-ghost{ background:transparent; color:var(--dim); border:1px solid var(--border); }
+  /* Stats */
+  .stats{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:20px; }
+  .stat{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; text-align:center; }
+  .stat .num{ font-size:28px; font-weight:700; }
+  .stat .lbl{ font-size:12px; color:var(--dim); margin-top:4px; }
+  .stat.total .num{ color:var(--txt); }
+  .stat.activas .num{ color:var(--green); }
+  .stat.revocadas .num{ color:var(--red); }
+  /* Licencias */
+  .lic{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:12px; }
+  .lic-top{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+  .lic-cliente{ font-size:16px; font-weight:700; }
+  .lic-estado{ font-size:11px; padding:4px 10px; border-radius:20px; font-weight:600; }
+  .lic-estado.active{ background:rgba(0,255,157,.15); color:var(--green); }
+  .lic-estado.revoked{ background:rgba(239,68,68,.15); color:var(--red); }
+  .lic-datos{ font-size:12px; color:var(--dim); line-height:1.8; margin-bottom:12px; word-break:break-all; }
+  .lic-datos b{ color:var(--txt); }
+  .lic-btns{ display:flex; gap:8px; flex-wrap:wrap; }
+  .lic-btns button{ flex:1; min-width:90px; padding:10px; border-radius:8px; border:none; font-size:12px; font-weight:600; cursor:pointer; }
+  .b-revocar{ background:rgba(239,68,68,.15); color:var(--red); }
+  .b-activar{ background:rgba(0,255,157,.15); color:var(--green); }
+  .b-borrar{ background:transparent; color:var(--dim); border:1px solid var(--border); }
+  .b-copiar{ background:rgba(136,153,170,.15); color:var(--dim); }
+  #toast{ position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--card); border:1px solid var(--green); color:var(--txt); padding:12px 24px; border-radius:10px; font-size:14px; display:none; z-index:100; }
+</style>
+</head>
+<body>
+<div id="login">
+  <h1>🔐 Panel de Licencias</h1>
+  <p>Ingresá tu clave para acceder</p>
+  <input type="password" id="clave" placeholder="Clave del panel" onkeydown="if(event.key==='Enter')entrar()">
+  <button onclick="entrar()">Entrar</button>
+  <div class="err" id="loginErr"></div>
+</div>
+
+<div id="panel">
+  <div class="top">
+    <h1>⚙️ Licencias</h1>
+    <div class="actions">
+      <button class="btn btn-green" onclick="crearLicencia()">+ Nueva</button>
+      <button class="btn btn-ghost" onclick="cargar()">↻ Refrescar</button>
+      <button class="btn btn-ghost" onclick="salir()">Salir</button>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat total"><div class="num" id="sTotal">0</div><div class="lbl">Total</div></div>
+    <div class="stat activas"><div class="num" id="sActivas">0</div><div class="lbl">Activas</div></div>
+    <div class="stat revocadas"><div class="num" id="sRevocadas">0</div><div class="lbl">Desactivadas</div></div>
+  </div>
+
+  <div id="listaLic"></div>
+</div>
+
+<div id="toast"></div>
+<script>
+let CLAVE = '';
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  setTimeout(()=>{ t.style.display = 'none'; }, 2500);
+}
+
+async function api(ruta, metodo){
+  const r = await fetch('/panel/api/' + ruta, {
+    method: metodo || 'GET',
+    headers: { 'x-panel-key': CLAVE }
+  });
+  if(r.status === 401) throw new Error('no-auth');
+  return r.json();
+}
+
+async function entrar(){
+  CLAVE = document.getElementById('clave').value.trim();
+  if(!CLAVE) return;
+  try {
+    await api('licencias');
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('panel').style.display = 'block';
+    cargar();
+  } catch(e){
+    document.getElementById('loginErr').textContent = 'Clave incorrecta';
+  }
+}
+
+function salir(){
+  CLAVE = '';
+  document.getElementById('panel').style.display = 'none';
+  document.getElementById('login').style.display = 'flex';
+  document.getElementById('clave').value = '';
+  document.getElementById('loginErr').textContent = '';
+}
+
+function fecha(iso){
+  if(!iso) return 'nunca';
+  const d = new Date(iso);
+  return d.toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+
+async function cargar(){
+  try {
+    const data = await api('licencias');
+    document.getElementById('sTotal').textContent = data.total;
+    document.getElementById('sActivas').textContent = data.activas;
+    document.getElementById('sRevocadas').textContent = data.revocadas;
+    const cont = document.getElementById('listaLic');
+    cont.innerHTML = '';
+    data.licencias.forEach(l => {
+      const activa = l.status === 'active';
+      const div = document.createElement('div');
+      div.className = 'lic';
+      div.innerHTML =
+        '<div class="lic-top">' +
+          '<span class="lic-cliente">' + (l.cliente || '(sin nombre)') + '</span>' +
+          '<span class="lic-estado ' + l.status + '">' + (activa ? 'ACTIVA' : 'DESACTIVADA') + '</span>' +
+        '</div>' +
+        '<div class="lic-datos">' +
+          '<b>IP:</b> ' + (l.ip_bound || 'sin registrar') + '<br>' +
+          '<b>Token:</b> ' + l.token + '<br>' +
+          '<b>Ultima conexion:</b> ' + fecha(l.last_seen) + '<br>' +
+          '<b>Version:</b> ' + (l.bot_version || '-') +
+        '</div>' +
+        '<div class="lic-btns">' +
+          (activa
+            ? '<button class="b-revocar" onclick="revocar(\'' + l.token + '\')">🚫 Desactivar</button>'
+            : '<button class="b-activar" onclick="activar(\'' + l.token + '\')">✅ Activar</button>') +
+          '<button class="b-copiar" onclick="copiar(\'' + l.token + '\')">📋 Copiar link</button>' +
+          '<button class="b-borrar" onclick="borrar(\'' + l.token + '\')">🗑️</button>' +
+        '</div>';
+      cont.appendChild(div);
+    });
+  } catch(e){ toast('Error al cargar'); }
+}
+
+async function revocar(token){
+  if(!confirm('¿Desactivar esta licencia? El bot del cliente dejará de funcionar.')) return;
+  await api('revocar/' + token, 'POST');
+  toast('Licencia desactivada'); cargar();
+}
+
+async function activar(token){
+  await api('activar/' + token, 'POST');
+  toast('Licencia activada'); cargar();
+}
+
+async function borrar(token){
+  if(!confirm('¿BORRAR esta licencia? Esto no se puede deshacer.')) return;
+  await api('borrar/' + token, 'DELETE');
+  toast('Licencia borrada'); cargar();
+}
+
+async function crearLicencia(){
+  const cliente = prompt('Nombre del cliente:');
+  if(cliente === null) return;
+  const r = await api('crear?cliente=' + encodeURIComponent(cliente), 'POST');
+  toast('Licencia creada'); cargar();
+}
+
+function copiar(token){
+  const link = 'https://licencias.charly-tricks.dev/i/' + token;
+  navigator.clipboard.writeText(link).then(()=> toast('Link copiado'));
+}
+</script>
+</body>
+</html>
