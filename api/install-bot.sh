@@ -68,10 +68,10 @@ cat > config.json <<'CFGJSON'
   "moneda": "$",
   "modo": "datos",
   "planes": [
-    { "id": 1, "nombre": "10 GB",  "gb": 10,  "precio": 2500 },
-    { "id": 2, "nombre": "25 GB",  "gb": 25,  "precio": 5000 },
-    { "id": 3, "nombre": "50 GB",  "gb": 50,  "precio": 8000 },
-    { "id": 4, "nombre": "100 GB", "gb": 100, "precio": 13000 }
+    { "id": 1, "nombre": "10 GB",  "mb": 10240,  "precio": 2500 },
+    { "id": 2, "nombre": "25 GB",  "mb": 25600,  "precio": 5000 },
+    { "id": 3, "nombre": "50 GB",  "mb": 51200,  "precio": 8000 },
+    { "id": 4, "nombre": "100 GB", "mb": 102400, "precio": 13000 }
   ],
   "dias_cuenta": 30,
   "usar_hwid": false,
@@ -155,37 +155,42 @@ function ejecutarComando(comando) {
   });
 }
 
-// Lee el límite actual de una cuenta y lo devuelve en GB (number).
-function parseGB(info) {
+// Lee el límite actual de una cuenta y lo devuelve en MB (number entero).
+function formatDatos(mb) {
+  if (mb >= 1024 && mb % 1024 === 0) return (mb / 1024) + ' GB';
+  if (mb >= 1024) return (Math.round((mb / 1024) * 100) / 100) + ' GB';
+  return Math.round(mb) + ' MB';
+}
+function parseMB(info) {
   const m = info.match(/Limit:\s*([\d.]+)\s*(GB|MB|TB)/i);
   if (!m) return 0;
   let val = parseFloat(m[1]);
   const unidad = m[2].toUpperCase();
-  if (unidad === 'MB') val = val / 1024;
-  else if (unidad === 'TB') val = val * 1024;
-  return val; // en GB
+  if (unidad === 'GB') val = val * 1024;
+  else if (unidad === 'TB') val = val * 1024 * 1024;
+  return Math.round(val); // en MB entero
 }
 
 // ---- CUENTAS SSH (usuario/contraseña) ----
-async function crearCuentaDatos(usuario, gb) {
+async function crearCuentaDatos(usuario, mb) {
   const password = generarPassword();
   const comando = `/ssh add ${usuario} ${password} ${CONEXIONES} ${DIAS_CUENTA}`;
   const respuesta = await ejecutarComando(comando);
   const ok = /creado|success/i.test(respuesta);
   if (!ok) return { success: false, error: respuesta };
-  await ejecutarComando(`/ssh set limit ${usuario} ${gb} GB`);
-  return { success: true, user: usuario, password, gb };
+  await ejecutarComando(`/ssh set limit ${usuario} ${Math.round(mb)} MB`);
+  return { success: true, user: usuario, password, mb };
 }
 
-async function leerLimiteGB(usuario) {
+async function leerLimiteMB(usuario) {
   const info = await ejecutarComando(`/ssh info ${usuario}`);
-  return parseGB(info);
+  return parseMB(info);
 }
 
-async function recargarDatos(usuario, gbNuevos) {
-  const limiteActualGB = await leerLimiteGB(usuario);
-  const nuevoTotalGB = Math.round((limiteActualGB + gbNuevos) * 100) / 100;
-  const respuesta = await ejecutarComando(`/ssh set limit ${usuario} ${nuevoTotalGB} GB`);
+async function recargarDatos(usuario, mbNuevos) {
+  const limiteActualMB = await leerLimiteMB(usuario);
+  const nuevoTotalMB = Math.round(limiteActualMB + mbNuevos);
+  const respuesta = await ejecutarComando(`/ssh set limit ${usuario} ${nuevoTotalMB} MB`);
   const ok = /l[ií]mite|limit/i.test(respuesta);
   const rExp = await ejecutarComando(`/ssh set expire ${usuario} ${DIAS_CUENTA}`);
   if (!/unlok/i.test(rExp)) {
@@ -194,7 +199,7 @@ async function recargarDatos(usuario, gbNuevos) {
       await ejecutarComando(`/ssh set status ${usuario}`);
     }
   }
-  return { success: ok, totalGB: nuevoTotalGB, dias: DIAS_CUENTA, respuesta };
+  return { success: ok, totalMB: nuevoTotalMB, dias: DIAS_CUENTA, respuesta };
 }
 
 async function infoCuenta(usuario) { return await ejecutarComando(`/ssh info ${usuario}`); }
@@ -210,29 +215,29 @@ async function crearCuentaHwid(hwid, nombre, gb) {
   }
   const ok = /creat|success|creado/i.test(respuesta);
   if (!ok) return { success: false, error: respuesta };
-  await ejecutarComando(`/hwid set limit ${hwid} ${gb} GB`);
-  return { success: true, hwid, nombre, gb };
+  await ejecutarComando(`/hwid set limit ${hwid} ${Math.round(mb)} MB`);
+  return { success: true, hwid, nombre, mb };
 }
 
-async function leerLimiteHwidGB(hwid) {
+async function leerLimiteHwidMB(hwid) {
   const info = await ejecutarComando(`/hwid info ${hwid}`);
-  return parseGB(info);
+  return parseMB(info);
 }
 
-async function recargarHwid(hwid, gbNuevos) {
-  const limiteActualGB = await leerLimiteHwidGB(hwid);
-  const nuevoTotalGB = Math.round((limiteActualGB + gbNuevos) * 100) / 100;
-  const respuesta = await ejecutarComando(`/hwid set limit ${hwid} ${nuevoTotalGB} GB`);
+async function recargarHwid(hwid, mbNuevos) {
+  const limiteActualMB = await leerLimiteHwidMB(hwid);
+  const nuevoTotalMB = Math.round(limiteActualMB + mbNuevos);
+  const respuesta = await ejecutarComando(`/hwid set limit ${hwid} ${nuevoTotalMB} MB`);
   const ok = /l[ií]mite|limit/i.test(respuesta);
   await ejecutarComando(`/hwid set expire ${hwid} ${DIAS_CUENTA}`);
-  return { success: ok, totalGB: nuevoTotalGB, dias: DIAS_CUENTA, respuesta };
+  return { success: ok, totalMB: nuevoTotalMB, dias: DIAS_CUENTA, respuesta };
 }
 
 function validarHwid(hwid) {
   return /^[a-fA-F0-9]{32}$/.test((hwid || '').trim());
 }
 
-module.exports = { crearCuentaDatos, recargarDatos, leerLimiteGB, infoCuenta, generarPassword, ejecutarComando, crearCuentaHwid, recargarHwid, leerLimiteHwidGB, validarHwid };
+module.exports = { crearCuentaDatos, recargarDatos, leerLimiteMB, infoCuenta, generarPassword, ejecutarComando, crearCuentaHwid, recargarHwid, leerLimiteHwidMB, validarHwid };
 ADMRUFUEOF
 
 cat > uala.js <<'UALAEOF'
@@ -330,7 +335,7 @@ async function generarLinkPago(jid, plan, hwid) {
     await SOCK.sendMessage(jid, { text: '⏳ Generando tu link de pago, esperá un momento...' });
     const ref = `${jid.split('@')[0]}-${Date.now()}`;
     const orden = await uala.crearOrden(plan.precio, `${plan.nombre} - ${CFG.negocio}`, ref);
-    VENTAS.ordenes[orden.uuid] = { jid, plan_id: plan.id, gb: plan.gb, precio: plan.precio, uuid: orden.uuid, ref, creada: Date.now(), estado: 'pendiente', hwid: hwid || null };
+    VENTAS.ordenes[orden.uuid] = { jid, plan_id: plan.id, mb: plan.mb, precio: plan.precio, uuid: orden.uuid, ref, creada: Date.now(), estado: 'pendiente', hwid: hwid || null };
     guardarVentas(VENTAS);
     sesiones[jid] = { paso: 'pagando', uuid: orden.uuid };
     await SOCK.sendMessage(jid, { text: `💳 *${plan.nombre}* — ${CFG.moneda}${plan.precio}\n\nPagá desde este link:\n${orden.checkout_link}\n\nCuando completes el pago, te activo los datos automáticamente. ⏳` });
@@ -397,15 +402,16 @@ async function main() {
   async function entregarCompra(o, hwidRecibido) {
     const clienteExistente = CLIENTES[o.jid];
 
-    if (USAR_HWID) {
+    const usarHwidAhora = !!(hwidRecibido || (clienteExistente && clienteExistente.hwid));
+    if (usarHwidAhora) {
       // ----- MODO HWID -----
       if (clienteExistente && clienteExistente.hwid) {
         // Recargar cuenta HWID existente
-        const r = await admrufu.recargarHwid(clienteExistente.hwid, o.gb);
+        const r = await admrufu.recargarHwid(clienteExistente.hwid, o.mb);
         if (r.success) {
-          CLIENTES[o.jid].gb = (CLIENTES[o.jid].gb || 0) + o.gb;
+          CLIENTES[o.jid].mb = (CLIENTES[o.jid].mb || 0) + o.mb;
           guardarClientes(CLIENTES);
-          try { await sock.sendMessage(o.jid, { text: `✅ *¡Recarga confirmada!*\n\n📊 *Datos agregados:* ${o.gb} GB\n📅 *Validez renovada:* ${r.dias} días\n\n¡Gracias! 🚀` }); } catch(e){}
+          try { await sock.sendMessage(o.jid, { text: `✅ *¡Recarga confirmada!*\n\n📊 *Datos agregados:* ${formatDatos(o.mb)}\n📅 *Validez renovada:* ${r.dias} días\n\n¡Gracias! 🚀` }); } catch(e){}
           return true;
         } else {
           try { await sock.sendMessage(o.jid, { text: `⚠️ Tu pago se confirmó pero hubo un problema con la recarga. Contactá al soporte.` }); } catch(e){}
@@ -414,11 +420,11 @@ async function main() {
       } else {
         // Cuenta HWID nueva (necesita el HWID)
         const nombre = generarUsuario();
-        const r = await admrufu.crearCuentaHwid(hwidRecibido, nombre, o.gb);
+        const r = await admrufu.crearCuentaHwid(hwidRecibido, nombre, o.mb);
         if (r.success) {
-          CLIENTES[o.jid] = { hwid: hwidRecibido, nombre, gb: o.gb };
+          CLIENTES[o.jid] = { hwid: hwidRecibido, nombre, mb: o.mb };
           guardarClientes(CLIENTES);
-          try { await sock.sendMessage(o.jid, { text: `✅ *¡Cuenta activada!*\n\n📊 *Datos:* ${o.gb} GB\n📅 *Validez:* ${CFG.dias_cuenta} días\n\n📲 Pedí tu archivo de configuración en el grupo con el comando *${CFG.comando_archivo || '/archivo hwid'}*\n\n¡Gracias por tu compra! 🚀` }); } catch(e){}
+          try { await sock.sendMessage(o.jid, { text: `✅ *¡Cuenta activada!*\n\n📊 *Datos:* ${formatDatos(o.mb)}\n📅 *Validez:* ${CFG.dias_cuenta} días\n\n📲 Pedí tu archivo de configuración en el grupo con el comando *${CFG.comando_archivo || '/archivo hwid'}*\n\n¡Gracias por tu compra! 🚀` }); } catch(e){}
           return true;
         } else {
           try { await sock.sendMessage(o.jid, { text: `⚠️ Tu pago se confirmó pero hubo un problema activando tu cuenta. Contactá al soporte.` }); } catch(e){}
@@ -429,11 +435,11 @@ async function main() {
     } else {
       // ----- MODO SSH NORMAL -----
       if (clienteExistente && clienteExistente.usuario) {
-        const r = await admrufu.recargarDatos(clienteExistente.usuario, o.gb);
+        const r = await admrufu.recargarDatos(clienteExistente.usuario, o.mb);
         if (r.success) {
-          CLIENTES[o.jid].gb = (CLIENTES[o.jid].gb || 0) + o.gb;
+          CLIENTES[o.jid].mb = (CLIENTES[o.jid].mb || 0) + o.mb;
           guardarClientes(CLIENTES);
-          try { await sock.sendMessage(o.jid, { text: `✅ *¡Recarga confirmada!*\n\n👤 *Usuario:* ${clienteExistente.usuario}\n📊 *Datos agregados:* ${o.gb} GB\n📅 *Validez renovada:* ${r.dias} días\n\n¡Gracias! 🚀` }); } catch(e){}
+          try { await sock.sendMessage(o.jid, { text: `✅ *¡Recarga confirmada!*\n\n👤 *Usuario:* ${clienteExistente.usuario}\n📊 *Datos agregados:* ${formatDatos(o.mb)}\n📅 *Validez renovada:* ${r.dias} días\n\n¡Gracias! 🚀` }); } catch(e){}
           return true;
         } else {
           try { await sock.sendMessage(o.jid, { text: `⚠️ Tu pago se confirmó pero hubo un problema con la recarga. Contactá al soporte.` }); } catch(e){}
@@ -441,11 +447,11 @@ async function main() {
         }
       } else {
         const usuario = generarUsuario();
-        const r = await admrufu.crearCuentaDatos(usuario, o.gb);
+        const r = await admrufu.crearCuentaDatos(usuario, o.mb);
         if (r.success) {
-          CLIENTES[o.jid] = { usuario: r.user, gb: o.gb };
+          CLIENTES[o.jid] = { usuario: r.user, mb: o.mb };
           guardarClientes(CLIENTES);
-          try { await sock.sendMessage(o.jid, { text: `✅ *¡Pago confirmado!* Tu cuenta está lista:\n\n👤 *Usuario:* ${r.user}\n🔑 *Contraseña:* ${r.password}\n📊 *Datos:* ${o.gb} GB\n📅 *Validez:* ${CFG.dias_cuenta} días\n\n¡Gracias por tu compra! 🚀` }); } catch(e){}
+          try { await sock.sendMessage(o.jid, { text: `✅ *¡Pago confirmado!* Tu cuenta está lista:\n\n👤 *Usuario:* ${r.user}\n🔑 *Contraseña:* ${r.password}\n📊 *Datos:* ${formatDatos(o.mb)}\n📅 *Validez:* ${CFG.dias_cuenta} días\n\n¡Gracias por tu compra! 🚀` }); } catch(e){}
           return true;
         } else {
           try { await sock.sendMessage(o.jid, { text: `⚠️ Tu pago se confirmó pero hubo un problema creando la cuenta. Contactá al soporte.` }); } catch(e){}
@@ -503,7 +509,7 @@ async function main() {
           txt += '📦 *PLANES:*\n';
           CFG.planes.forEach(p => { txt += `  *${p.id}.* ${p.nombre} — ${CFG.moneda}${p.precio}\n`; });
           txt += '\n📝 *COMANDOS:*\n';
-          txt += '`/precio [id] [valor]`\n`/nombre [id] [texto]`\n`/dias [numero]`\n`/negocio [texto]`\n`/mensaje [texto]`\n';
+          txt += '`/precio [id] [valor]`\n`/nombre [id] [texto]`\n`/agregarplan [cant] [GB/MB] [precio]`\n`/borrarplan [id]`\n`/dias [numero]`\n`/negocio [texto]`\n`/mensaje [texto]`\n';
           await sock.sendMessage(jid, { text: txt });
           return;
         }
@@ -518,6 +524,30 @@ async function main() {
           if (!plan || !nom) { await sock.sendMessage(jid, { text: '❌ Uso: /nombre [id] [texto]' }); return; }
           plan.nombre = nom; guardarConfig();
           await sock.sendMessage(jid, { text: `✅ Nombre del plan ${p[1]} ahora es *${nom}*` }); return;
+        }
+        if (t.startsWith('/agregarplan')) {
+          const p = texto.split(/\s+/);
+          const cantidad = parseFloat(p[1]);
+          const unidad = (p[2] || '').toUpperCase();
+          const precio = parseInt(p[3]);
+          if (isNaN(cantidad) || (unidad !== 'GB' && unidad !== 'MB') || isNaN(precio)) {
+            await sock.sendMessage(jid, { text: 'Uso: /agregarplan [cantidad] [GB/MB] [precio]\nEj: /agregarplan 100 MB 500\nEj: /agregarplan 10 GB 5000' }); return;
+          }
+          const mbTotal = unidad === 'GB' ? Math.round(cantidad * 1024) : Math.round(cantidad);
+          const nombre = cantidad + ' ' + unidad;
+          const nuevoId = CFG.planes.length ? Math.max(...CFG.planes.map(p => p.id)) + 1 : 1;
+          CFG.planes.push({ id: nuevoId, nombre: nombre, mb: mbTotal, precio: precio });
+          guardarConfig();
+          await sock.sendMessage(jid, { text: 'Plan agregado:\n' + nuevoId + '. ' + nombre + ' - ' + CFG.moneda + precio }); return;
+        }
+        if (t.startsWith('/borrarplan')) {
+          const p = texto.split(/\s+/);
+          const id = parseInt(p[1]);
+          const idx = CFG.planes.findIndex(pl => pl.id === id);
+          if (isNaN(id) || idx === -1) { await sock.sendMessage(jid, { text: 'Uso: /borrarplan [id]\nUsa /config para ver los ids.' }); return; }
+          const borrado = CFG.planes.splice(idx, 1)[0];
+          guardarConfig();
+          await sock.sendMessage(jid, { text: 'Plan borrado: ' + borrado.nombre }); return;
         }
         if (t.startsWith('/dias')) {
           const p = texto.split(/\s+/); const d = parseInt(p[1]);
@@ -593,13 +623,29 @@ async function main() {
         if (!plan) { await sock.sendMessage(jid, { text: '❌ Opción no válida. Respondé con el número del paquete.' }); return; }
         const clienteExistente = CLIENTES[jid];
         // Si usa HWID y es cliente NUEVO, pedir el HWID ANTES del pago
-        if (USAR_HWID && !(clienteExistente && clienteExistente.hwid)) {
-          sesiones[jid] = { paso: 'hwid_antes_pago', plan };
-          await sock.sendMessage(jid, { text: `📲 Antes de pagar, necesito tu *HWID* para activar tu cuenta:\n\n1️⃣ Abrí HTTP Custom\n2️⃣ Andá al menú → *HWID*\n3️⃣ Copialo y pegalo acá 👇` });
+        if (clienteExistente && clienteExistente.hwid) {
+          await generarLinkPago(jid, plan, clienteExistente.hwid); return;
+        }
+        if (clienteExistente && clienteExistente.usuario) {
+          await generarLinkPago(jid, plan, null); return;
+        }
+        // Cliente NUEVO: preguntar como quiere la cuenta
+        sesiones[jid] = { paso: 'eligiendo_modo', plan };
+        await sock.sendMessage(jid, { text: '\uD83D\uDCE6 *Como queres tu cuenta?*\n\n*1. Usuario y contrasena*\nMas facil de usar.\n\n*2. HWID (por dispositivo)*\nMas seguro, se activa solo en tu celular.\n\n_Responde *1* o *2*_' });
+        return;
+      }
+      if (ses && ses.paso === 'eligiendo_modo') {
+        const op = texto.trim();
+        if (op === '1') {
+          await generarLinkPago(jid, ses.plan, null);
           return;
         }
-        // SSH normal, o recarga HWID (ya tiene hwid): generar link directo
-        await generarLinkPago(jid, plan, (clienteExistente && clienteExistente.hwid) || null);
+        if (op === '2') {
+          sesiones[jid] = { paso: 'hwid_antes_pago', plan: ses.plan };
+          await sock.sendMessage(jid, { text: '\uD83D\uDCF2 Necesito tu *HWID* para activar tu cuenta:\n\n1. Abri HTTP Custom\n2. Anda al menu HWID\n3. Copialo y pegalo aca' });
+          return;
+        }
+        await sock.sendMessage(jid, { text: 'Responde *1* (usuario y contrasena) o *2* (HWID).' });
         return;
       }
       await sock.sendMessage(jid, { text: CFG.mensaje_bienvenida });
