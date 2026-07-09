@@ -188,8 +188,8 @@ async function leerLimiteMB(usuario) {
 }
 
 async function recargarDatos(usuario, mbNuevos) {
-  const limiteActualMB = await leerLimiteMB(usuario);
-  const nuevoTotalMB = Math.round(limiteActualMB + mbNuevos);
+  const nuevoTotalMB = Math.round(mbNuevos);
+  await ejecutarComando(`/ssh set use ${usuario}`);
   const respuesta = await ejecutarComando(`/ssh set limit ${usuario} ${nuevoTotalMB} MB`);
   const ok = /l[ií]mite|limit/i.test(respuesta);
   const rExp = await ejecutarComando(`/ssh set expire ${usuario} ${DIAS_CUENTA}`);
@@ -205,12 +205,12 @@ async function recargarDatos(usuario, mbNuevos) {
 async function infoCuenta(usuario) { return await ejecutarComando(`/ssh info ${usuario}`); }
 
 // ---- CUENTAS POR HWID ----
-async function crearCuentaHwid(hwid, nombre, gb) {
+async function crearCuentaHwid(hwid, nombre, mb) {
   const comando = `/hwid add ${hwid} ${nombre} ${DIAS_CUENTA}`;
   const respuesta = await ejecutarComando(comando);
   if (/already exists|ya existe/i.test(respuesta)) {
-    const r = await recargarHwid(hwid, gb);
-    if (r.success) return { success: true, hwid, nombre, gb, recargada: true };
+    const r = await recargarHwid(hwid, mb);
+    if (r.success) return { success: true, hwid, nombre, mb, recargada: true };
     return { success: false, error: 'No se pudo recargar la cuenta existente: ' + r.respuesta };
   }
   const ok = /creat|success|creado/i.test(respuesta);
@@ -225,8 +225,8 @@ async function leerLimiteHwidMB(hwid) {
 }
 
 async function recargarHwid(hwid, mbNuevos) {
-  const limiteActualMB = await leerLimiteHwidMB(hwid);
-  const nuevoTotalMB = Math.round(limiteActualMB + mbNuevos);
+  const nuevoTotalMB = Math.round(mbNuevos);
+  await ejecutarComando(`/hwid set use ${hwid}`);
   const respuesta = await ejecutarComando(`/hwid set limit ${hwid} ${nuevoTotalMB} MB`);
   const ok = /l[ií]mite|limit/i.test(respuesta);
   await ejecutarComando(`/hwid set expire ${hwid} ${DIAS_CUENTA}`);
@@ -424,7 +424,7 @@ async function main() {
         if (r.success) {
           CLIENTES[o.jid] = { hwid: hwidRecibido, nombre, mb: o.mb };
           guardarClientes(CLIENTES);
-          try { await sock.sendMessage(o.jid, { text: `✅ *¡Cuenta activada!*\n\n📊 *Datos:* ${formatDatos(o.mb)}\n📅 *Validez:* ${CFG.dias_cuenta} días\n\n📲 Pedí tu archivo de configuración en el grupo con el comando *${CFG.comando_archivo || '/archivo hwid'}*\n\n¡Gracias por tu compra! 🚀` }); } catch(e){}
+          try { await sock.sendMessage(o.jid, { text: `✅ *¡Cuenta activada!*\n\n📊 *Datos:* ${formatDatos(o.mb)}\n📅 *Validez:* ${CFG.dias_cuenta} días\n\n📲 Pedí tu archivo de configuración escribiendo el comando */hc*\n\n¡Gracias por tu compra! 🚀` }); } catch(e){}
           return true;
         } else {
           try { await sock.sendMessage(o.jid, { text: `⚠️ Tu pago se confirmó pero hubo un problema activando tu cuenta. Contactá al soporte.` }); } catch(e){}
