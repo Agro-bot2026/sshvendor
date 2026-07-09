@@ -25,13 +25,30 @@ echo "$API_BASE" > .apibase
 
 echo ""
 echo "=================================================="
-echo "   CONFIGURACION DE UALA BIS (cobros)"
+echo "   METODO DE COBRO"
 echo "=================================================="
-echo "Ingresa tus credenciales de Uala Bis:"
+echo "  Con que queres cobrarles a tus clientes?"
+echo "    1) Uala Bis"
+echo "    2) Mercado Pago"
+echo "    3) Los dos (el cliente elige al pagar)"
 echo ""
-read -p "  Username: " UALA_USER < /dev/tty
-read -p "  Client ID: " UALA_CID < /dev/tty
-read -p "  Client Secret: " UALA_SECRET < /dev/tty
+read -p "  Elegi 1, 2 o 3: " METODO_PAGO < /dev/tty
+METODO_PAGO=$(echo "$METODO_PAGO" | tr -cd "0-9")
+if [ "$METODO_PAGO" != "2" ]; then echo "$METODO_PAGO" | grep -q "3" || [ "$METODO_PAGO" = "1" ] || METODO_PAGO="1"; fi
+UALA_USER=""; UALA_CID=""; UALA_SECRET=""; MP_TOKEN=""
+if [ "$METODO_PAGO" = "1" ] || [ "$METODO_PAGO" = "3" ]; then
+  echo ""
+  echo "  --- Credenciales de Uala Bis ---"
+  read -p "  Username: " UALA_USER < /dev/tty
+  read -p "  Client ID: " UALA_CID < /dev/tty
+  read -p "  Client Secret: " UALA_SECRET < /dev/tty
+fi
+if [ "$METODO_PAGO" = "2" ] || [ "$METODO_PAGO" = "3" ]; then
+  echo ""
+  echo "  --- Token de Mercado Pago ---"
+  echo "  (Access Token de produccion, desde tu panel de MP)"
+  read -p "  MP Access Token: " MP_TOKEN < /dev/tty
+fi
 echo ""
 echo ""
 echo "  =========================================="
@@ -55,7 +72,12 @@ cat > uala-credenciales.json <<UALACRED
 }
 UALACRED
 chmod 600 uala-credenciales.json
-echo "Credenciales de Uala guardadas (archivo protegido)."
+# Guardar token de Mercado Pago (si se cargo)
+echo "$MP_TOKEN" > /opt/sshvendor-bot/mp-token.txt
+chmod 600 /opt/sshvendor-bot/mp-token.txt
+# Guardar el metodo de pago elegido
+echo "$METODO_PAGO" > /opt/sshvendor-bot/metodo-pago.txt
+echo "Credenciales de cobro guardadas (archivos protegidos)."
 
 cat > package.json <<'PKG'
 { "name":"sshvendor-bot","version":"1.0.0","main":"index.js",
@@ -285,6 +307,50 @@ async function consultarOrden(uuid) {
 module.exports = { crearOrden, consultarOrden, getToken };
 UALAEOF
 
+cat > mercadopago.js <<'MPEOF'
+const axios = require('axios');
+const fs = require('fs');
+const MP_API = "https://api.mercadopago.com";
+function cargarToken() {
+  return fs.readFileSync(__dirname + '/mp-token.txt', 'utf8').trim();
+}
+function urlWhatsappBot() {
+  try {
+    const num = fs.readFileSync(__dirname + '/mi-numero.txt', 'utf8').trim();
+    if (num && /^[0-9]+$/.test(num)) return `https://wa.me/${num}`;
+  } catch (e) {}
+  return "https://wa.me";
+}
+async function crearOrden(monto, descripcion, referencia) {
+  const token = cargarToken();
+  const pref = {
+    items: [{ title: descripcion, quantity: 1, unit_price: Number(monto), currency_id: "ARS" }],
+    external_reference: String(referencia),
+    back_urls: { success: urlWhatsappBot() },
+    auto_return: "approved"
+  };
+  const r = await axios.post(`${MP_API}/checkout/preferences`, pref, {
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+    timeout: 30000
+  });
+  return { checkout_link: r.data.init_point, uuid: r.data.id || "" };
+}
+async function consultarOrden(referencia) {
+  const token = cargarToken();
+  const r = await axios.get(`${MP_API}/v1/payments/search`, {
+    params: { external_reference: String(referencia), sort: "date_created", criteria: "desc" },
+    headers: { "Authorization": `Bearer ${token}` },
+    timeout: 20000
+  });
+  const resultados = (r.data && r.data.results) || [];
+  for (const p of resultados) {
+    if (p.status === "approved") return "APPROVED";
+  }
+  return "pending";
+}
+module.exports = { crearOrden, consultarOrden };
+MPEOF
+
 cat > index.js <<'INDEXEOF'
 const fs = require('fs'), path = require('path');
 const guard = require('./guard');
@@ -295,6 +361,9 @@ const pino = require('pino');
 
 const admrufu = require('./admrufu');
 const uala = require('./uala');
+const mercadopago = require('./mercadopago');
+let METODO_PAGO = '1';
+try { METODO_PAGO = fs.readFileSync(__dirname + '/metodo-pago.txt', 'utf8').trim() || '1'; } catch(e) {}
 
 const CFG = JSON.parse(fs.readFileSync(__dirname + '/config.json', 'utf8'));
 const VENTAS_FILE = __dirname + '/ventas.json';
@@ -330,12 +399,23 @@ function generarUsuario() { return `user${Math.floor(1000 + Math.random() * 9000
 let SOCK = null;
 
 // Genera el link de pago. Si hwid viene, lo guarda en la orden para usarlo al entregar.
-async function generarLinkPago(jid, plan, hwid) {
+async function iniciarPago(jid, plan, hwid) {
+  // Si el metodo es "los dos" (3), preguntar la pasarela; si no, ir directo
+  if (METODO_PAGO === '3') {
+    sesiones[jid] = { paso: 'eligiendo_pasarela', plan, hwid: hwid || null };
+    await SOCK.sendMessage(jid, { text: '\uD83D\uDCB3 *Como queres pagar?*\n\n*1. Uala Bis*\n*2. Mercado Pago*\n\n_Responde *1* o *2*_' });
+    return;
+  }
+  await generarLinkPago(jid, plan, hwid);
+}
+async function generarLinkPago(jid, plan, hwid, pasarela) {
   try {
     await SOCK.sendMessage(jid, { text: '⏳ Generando tu link de pago, esperá un momento...' });
     const ref = `${jid.split('@')[0]}-${Date.now()}`;
-    const orden = await uala.crearOrden(plan.precio, `${plan.nombre} - ${CFG.negocio}`, ref);
-    VENTAS.ordenes[orden.uuid] = { jid, plan_id: plan.id, mb: plan.mb, precio: plan.precio, uuid: orden.uuid, ref, creada: Date.now(), estado: 'pendiente', hwid: hwid || null };
+    const pas = pasarela || (METODO_PAGO === '2' ? 'mp' : 'uala');
+    const modulo = pas === 'mp' ? mercadopago : uala;
+    const orden = await modulo.crearOrden(plan.precio, `${plan.nombre} - ${CFG.negocio}`, ref);
+    VENTAS.ordenes[orden.uuid] = { jid, plan_id: plan.id, mb: plan.mb, precio: plan.precio, uuid: orden.uuid, ref, creada: Date.now(), estado: 'pendiente', hwid: hwid || null, pasarela: pas };
     guardarVentas(VENTAS);
     sesiones[jid] = { paso: 'pagando', uuid: orden.uuid };
     await SOCK.sendMessage(jid, { text: `💳 *${plan.nombre}* — ${CFG.moneda}${plan.precio}\n\nPagá desde este link:\n${orden.checkout_link}\n\nCuando completes el pago, te activo los datos automáticamente. ⏳` });
@@ -614,7 +694,14 @@ async function main() {
           return;
         }
         // HWID válido: ahora sí generar el link de pago, guardando el HWID en la orden
-        await generarLinkPago(jid, ses.plan, hwid);
+        await iniciarPago(jid, ses.plan, hwid);
+        return;
+      }
+      if (ses && ses.paso === 'eligiendo_pasarela') {
+        const op = texto.trim();
+        if (op === '1') { await generarLinkPago(jid, ses.plan, ses.hwid, 'uala'); return; }
+        if (op === '2') { await generarLinkPago(jid, ses.plan, ses.hwid, 'mp'); return; }
+        await sock.sendMessage(jid, { text: '❌  Respondé *1* (Uala) o *2* (Mercado Pago).' });
         return;
       }
 
@@ -624,10 +711,10 @@ async function main() {
         const clienteExistente = CLIENTES[jid];
         // Si usa HWID y es cliente NUEVO, pedir el HWID ANTES del pago
         if (clienteExistente && clienteExistente.hwid) {
-          await generarLinkPago(jid, plan, clienteExistente.hwid); return;
+          await iniciarPago(jid, plan, clienteExistente.hwid); return;
         }
         if (clienteExistente && clienteExistente.usuario) {
-          await generarLinkPago(jid, plan, null); return;
+          await iniciarPago(jid, plan, null); return;
         }
         // Cliente NUEVO: preguntar como quiere la cuenta
         sesiones[jid] = { paso: 'eligiendo_modo', plan };
@@ -637,7 +724,7 @@ async function main() {
       if (ses && ses.paso === 'eligiendo_modo') {
         const op = texto.trim();
         if (op === '1') {
-          await generarLinkPago(jid, ses.plan, null);
+          await iniciarPago(jid, ses.plan, null);
           return;
         }
         if (op === '2') {
@@ -657,7 +744,9 @@ async function main() {
     for (const o of pendientes) {
       if (Date.now() - o.creada > 30 * 60 * 1000) { o.estado = 'expirada'; guardarVentas(VENTAS); continue; }
       try {
-        const status = await uala.consultarOrden(o.uuid);
+        const moduloVerif = (o.pasarela === 'mp') ? mercadopago : uala;
+        const idConsulta = (o.pasarela === 'mp') ? o.ref : o.uuid;
+        const status = await moduloVerif.consultarOrden(idConsulta);
         if (status === 'APPROVED') {
           // Si ya se entregó del todo, marcar y seguir
           if (VENTAS.procesadas[o.uuid]) { o.estado = 'procesada'; guardarVentas(VENTAS); continue; }
