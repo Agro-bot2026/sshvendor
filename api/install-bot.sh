@@ -817,6 +817,41 @@ if [ "$1" = "hwid" ]; then
   fi
   exit 0
 fi
+if [ "$1" = "pago" ]; then
+  echo "=================================================="
+  echo "   CONFIGURAR METODO DE COBRO"
+  echo "=================================================="
+  echo "  Con que queres cobrarles a tus clientes?"
+  echo "    1) Uala Bis"
+  echo "    2) Mercado Pago"
+  echo "    3) Los dos (el cliente elige al pagar)"
+  echo ""
+  read -p "  Elegi 1, 2 o 3: " MP_METODO < /dev/tty
+  MP_METODO=$(echo "$MP_METODO" | tr -cd "0-9")
+  if [ "$MP_METODO" != "1" ] && [ "$MP_METODO" != "2" ] && [ "$MP_METODO" != "3" ]; then echo "Opcion invalida."; exit 1; fi
+  if [ "$MP_METODO" = "1" ] || [ "$MP_METODO" = "3" ]; then
+    echo ""
+    echo "  --- Credenciales de Uala Bis ---"
+    read -p "  Username: " U_USER < /dev/tty
+    read -p "  Client ID: " U_CID < /dev/tty
+    read -p "  Client Secret: " U_SEC < /dev/tty
+    printf '{\n  "username": "%s",\n  "client_id": "%s",\n  "client_secret": "%s"\n}\n' "$U_USER" "$U_CID" "$U_SEC" > "$BOT_DIR/uala-credenciales.json"
+    chmod 600 "$BOT_DIR/uala-credenciales.json"
+  fi
+  if [ "$MP_METODO" = "2" ] || [ "$MP_METODO" = "3" ]; then
+    echo ""
+    echo "  --- Token de Mercado Pago ---"
+    echo "  (Access Token de produccion, desde tu panel de MP)"
+    read -p "  MP Access Token: " MP_TK < /dev/tty
+    echo "$MP_TK" > "$BOT_DIR/mp-token.txt"
+    chmod 600 "$BOT_DIR/mp-token.txt"
+  fi
+  echo "$MP_METODO" > "$BOT_DIR/metodo-pago.txt"
+  pm2 restart sshvendor-bot >/dev/null 2>&1
+  echo ""
+  echo "Metodo de cobro configurado y bot reiniciado."
+  exit 0
+fi
 if [ "$1" = "fondo" ]; then pm2 start index.js --name sshvendor-bot && pm2 save && pm2 startup systemd -u root --hp /root >/dev/null 2>&1; exit 0; fi
 if [ "$1" = "stop" ]; then pm2 stop sshvendor-bot; exit 0; fi
 if [ "$1" = "logs" ]; then pm2 logs sshvendor-bot; exit 0; fi
