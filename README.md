@@ -258,3 +258,4 @@ Como los bots validan por dominio, al reapuntar el DNS siguen funcionando sin ca
 - **Mercado Pago:** integracion completa junto a Uala, con eleccion de pasarela.
 - **Migracion a la API oficial de Meta:** capa alternativa a Baileys, con botones interactivos y boton CTA de pago.
 - **Instalador con eleccion Baileys/Meta:** webhook + SSL automatico (puerto 8443) para convivir con ADMRufu, con avisos en colores y resumen final verificado.
+- **Fix entrega de .hc:** corregido el envio de archivos .hc por la API de Meta (content-type text/plain, Meta rechazaba el anterior).
