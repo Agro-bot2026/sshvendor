@@ -3,6 +3,7 @@ set -e
 TOKEN="__TOKEN__"
 API_BASE="__API_BASE__"
 BOT_DIR="/opt/sshvendor-bot"
+AZUL="\033[1;36m"; VERDE="\033[1;32m"; ROJO="\033[1;31m"; AMARILLO="\033[1;33m"; NC="\033[0m"
 
 echo "=================================================="
 echo "   INSTALADOR - BOT VENDEDOR DE SSH (por datos)"
@@ -28,27 +29,27 @@ echo ""
 echo "=================================================="
 echo "   CONEXION A WHATSAPP"
 echo "=================================================="
-echo "  Como queres conectar el bot a WhatsApp?"
-echo "    1) Baileys (escanear QR, gratis, mas simple)"
-echo "    2) API oficial de Meta (mas estable, con botones)"
+echo -e "${AZUL}  Como queres conectar el bot a WhatsApp?${NC}"
+echo -e "${AZUL}    1) Baileys (escanear QR, gratis, mas simple)${NC}"
+echo -e "${AZUL}    2) API oficial de Meta (mas estable, con botones)${NC}"
 echo ""
-read -p "  Elegi 1 o 2: " CAPA_WPP < /dev/tty
+read -p "$(echo -e ${VERDE}"  Elegi 1 o 2: "${NC})" CAPA_WPP < /dev/tty
 CAPA_WPP=$(echo "$CAPA_WPP" | tr -cd "0-9")
 if [ "$CAPA_WPP" != "2" ]; then CAPA_WPP="1"; fi
 echo "$CAPA_WPP" > "$BOT_DIR/capa-wpp.txt"
 
 if [ "$CAPA_WPP" = "2" ]; then
   echo ""
-  echo "  --- Datos de la API oficial de Meta ---"
-  echo "  (Los obtenes en developers.facebook.com -> tu app -> WhatsApp)"
+  echo -e "${AZUL}  --- Datos de la API oficial de Meta ---${NC}"
+  echo -e "${AZUL}  (Los obtenes en developers.facebook.com -> tu app -> WhatsApp)${NC}"
   echo ""
-  read -p "  Dominio del webhook (ej: botssh.tudominio.com): " META_DOMINIO < /dev/tty
-  read -p "  Token de acceso (permanente): " META_TOKEN_IN < /dev/tty
-  read -p "  Phone Number ID: " META_PHONE_ID < /dev/tty
-  read -p "  WhatsApp Business Account ID (WABA): " META_WABA_ID < /dev/tty
-  echo "  Verify token: inventa una palabra secreta (la vas a poner tambien en Meta)"
-  read -p "  Verify token: " META_VERIFY < /dev/tty
-  read -p "  Tu numero de WhatsApp admin (ej: 549XXXXXXXXXX): " META_ADMIN < /dev/tty
+  read -p "$(echo -e ${AZUL}"  Dominio del webhook (ej: botssh.tudominio.com): "${NC})" META_DOMINIO < /dev/tty
+  read -p "$(echo -e ${AZUL}"  Token de acceso (permanente): "${NC})" META_TOKEN_IN < /dev/tty
+  read -p "$(echo -e ${AZUL}"  Phone Number ID: "${NC})" META_PHONE_ID < /dev/tty
+  read -p "$(echo -e ${AZUL}"  WhatsApp Business Account ID (WABA): "${NC})" META_WABA_ID < /dev/tty
+  echo -e "${AZUL}  Verify token: inventa una palabra secreta (la vas a poner tambien en Meta)${NC}"
+  read -p "$(echo -e ${AZUL}"  Verify token: "${NC})" META_VERIFY < /dev/tty
+  read -p "$(echo -e ${AZUL}"  Tu numero de WhatsApp admin (ej: 549XXXXXXXXXX): "${NC})" META_ADMIN < /dev/tty
   META_ADMIN=$(echo "$META_ADMIN" | tr -cd "0-9")
   # Guardar .env del bot Meta
   cat > "$BOT_DIR/.env" <<METAENV
@@ -61,7 +62,7 @@ METAENV
   chmod 600 "$BOT_DIR/.env"
   echo "$META_DOMINIO" > "$BOT_DIR/dominio-webhook.txt"
   echo "$META_ADMIN"   > "$BOT_DIR/admin.txt"
-  echo "  Datos de Meta guardados."
+  echo -e "${VERDE}  Datos de Meta guardados.${NC}"
 fi
 
 echo ""
@@ -1369,6 +1370,23 @@ if [ "$1" = "pago" ]; then
   echo "Metodo de cobro configurado y bot reiniciado."
   exit 0
 fi
+if [ "$1" = "ssl" ]; then
+  DOMINIO=$(cat "$BOT_DIR/dominio-webhook.txt" 2>/dev/null)
+  if [ -z "$DOMINIO" ]; then echo "No hay dominio configurado (este bot no usa API de Meta)."; exit 1; fi
+  echo "Necesito los puertos 80 y 443 libres un momento."
+  echo "Si tenes ADMRufu usandolos, paralo desde su menu."
+  read -p "Escribi OK cuando esten libres: " C < /dev/tty
+  systemctl stop nginx >/dev/null 2>&1 || true
+  pkill -9 nginx >/dev/null 2>&1 || true
+  sleep 2
+  certbot certonly --standalone -d "$DOMINIO" --non-interactive --agree-tos -m admin@"$DOMINIO"
+  pkill -9 nginx >/dev/null 2>&1 || true
+  sleep 2
+  systemctl start nginx >/dev/null 2>&1
+  pm2 restart sshvendor-bot >/dev/null 2>&1
+  echo "Listo. Ya podes reactivar ADMRufu. El bot esta en el puerto 8443."
+  exit 0
+fi
 if [ "$1" = "fondo" ]; then
   CAPA=$(cat "$BOT_DIR/capa-wpp.txt" 2>/dev/null || echo "1")
   if [ "$CAPA" = "2" ]; then ARRANQUE="webhook.js"; else ARRANQUE="index.js"; fi
@@ -1385,13 +1403,40 @@ echo "==> Instalando librerias de Node (puede tardar)..."
 npm install --no-audit --no-fund >/dev/null 2>&1
 
 if [ "$CAPA_WPP" = "2" ]; then
-  echo "==> Configurando webhook con SSL para la API de Meta..."
   DOMINIO=$(cat "$BOT_DIR/dominio-webhook.txt")
   apt-get install -y nginx certbot python3-certbot-nginx >/dev/null 2>&1 || true
+  echo ""
+  echo -e "${AMARILLO}==================================================${NC}"
+  echo -e "${AMARILLO}   ATENCION - ACCION REQUERIDA${NC}"
+  echo -e "${AMARILLO}==================================================${NC}"
+  echo ""
+  echo -e "${AMARILLO}  Para instalar necesito los puertos 80 y 443 LIBRES${NC}"
+  echo -e "${AMARILLO}  un momento. Si tenes ADMRufu u otro servicio${NC}"
+  echo -e "${AMARILLO}  usandolos, PARALOS AHORA desde su menu.${NC}"
+  echo ""
+  echo -e "${AMARILLO}  Cuando esten libres, escribi OK para continuar.${NC}"
+  echo ""
+  read -p "$(echo -e ${VERDE}"  Escribi OK: "${NC})" CONFIRMA < /dev/tty
+  # Liberar puertos por si quedo algo de nginx
+  systemctl stop nginx >/dev/null 2>&1 || true
+  pkill -9 nginx >/dev/null 2>&1 || true
+  sleep 2
+  echo ""
+  echo "==> Sacando certificado SSL..."
+  certbot certonly --standalone -d "$DOMINIO" --non-interactive --agree-tos -m admin@"$DOMINIO" >/dev/null 2>&1
+  if [ ! -f "/etc/letsencrypt/live/$DOMINIO/fullchain.pem" ]; then
+    echo "  ERROR: no se pudo sacar el certificado. Verifica que el dominio $DOMINIO apunte a este VPS y que el puerto 80 este libre."
+    echo "  Podes reintentar despues con: sshbot ssl"
+  fi
+  # Configurar Nginx SOLO en 8443
   cat > /etc/nginx/sites-available/sshbot-meta <<NGINXEOF
 server {
-    listen 80;
+    listen 8443 ssl;
     server_name $DOMINIO;
+    ssl_certificate /etc/letsencrypt/live/$DOMINIO/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$DOMINIO/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     location / {
         proxy_pass http://127.0.0.1:8090;
         proxy_set_header Host \$host;
@@ -1402,9 +1447,13 @@ server {
 }
 NGINXEOF
   ln -sf /etc/nginx/sites-available/sshbot-meta /etc/nginx/sites-enabled/
-  nginx -t >/dev/null 2>&1 && systemctl reload nginx
-  certbot --nginx -d "$DOMINIO" --non-interactive --agree-tos -m admin@"$DOMINIO" --redirect >/dev/null 2>&1
-  systemctl reload nginx
+  # Quitar el default de nginx para que no ocupe el 80
+  rm -f /etc/nginx/sites-enabled/default
+  nginx -t >/dev/null 2>&1
+  pkill -9 nginx >/dev/null 2>&1 || true
+  sleep 2
+  systemctl start nginx >/dev/null 2>&1
+  systemctl enable nginx >/dev/null 2>&1
   pm2 delete sshvendor-bot >/dev/null 2>&1 || true
   pm2 start "$BOT_DIR/webhook.js" --name sshvendor-bot && pm2 save >/dev/null 2>&1
   pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
@@ -1413,14 +1462,46 @@ NGINXEOF
   echo "   INSTALACION COMPLETA (API de Meta)"
   echo "=================================================="
   echo ""
-  echo "El bot ya esta corriendo con la API oficial de Meta."
+  AZUL="\033[1;34m"; VERDE="\033[1;32m"; ROJO="\033[1;31m"; NC="\033[0m"
+  echo -e "${AZUL}RESUMEN DE LA INSTALACION:${NC}"
+  # Certificado SSL
+  if [ -f "/etc/letsencrypt/live/$DOMINIO/fullchain.pem" ]; then
+    echo -e "  ${VERDE}\xE2\x9C\x85${NC} ${AZUL}Certificado SSL${NC}"
+  else
+    echo -e "  ${ROJO}\xE2\x9D\x8C Certificado SSL (fallo - corre: sshbot ssl)${NC}"
+  fi
+  # Nginx en 8443
+  if ss -tlnp 2>/dev/null | grep -q ":8443"; then
+    echo -e "  ${VERDE}\xE2\x9C\x85${NC} ${AZUL}Nginx escuchando en 8443${NC}"
+  else
+    echo -e "  ${ROJO}\xE2\x9D\x8C Nginx en 8443 (no esta escuchando)${NC}"
+  fi
+  # Bot corriendo
+  if pm2 list 2>/dev/null | grep -q "sshvendor-bot"; then
+    echo -e "  ${VERDE}\xE2\x9C\x85${NC} ${AZUL}Bot corriendo${NC}"
+  else
+    echo -e "  ${ROJO}\xE2\x9D\x8C Bot no esta corriendo${NC}"
+  fi
+  # ADMRufu socket
+  if [ -S /tmp/admAPI.sock ]; then
+    echo -e "  ${VERDE}\xE2\x9C\x85${NC} ${AZUL}ADMRufu conectado${NC}"
+  else
+    echo -e "  ${ROJO}\xE2\x9D\x8C ADMRufu no detectado (verifica que este corriendo)${NC}"
+  fi
   echo ""
-  echo "CONFIGURA EL WEBHOOK EN META:"
-  echo "  URL: https://$DOMINIO/webhook"
-  echo "  Verify token: el que pusiste recien"
-  echo "  Suscribite al campo 'messages'"
+  echo -e "${AMARILLO}IMPORTANTE: ya podes REACTIVAR ADMRufu (puertos 80 y 443).${NC}"
+  echo -e "${AMARILLO}El bot quedo corriendo en el puerto 8443, no molesta a ADMRufu.${NC}"
   echo ""
-  echo "Despues escribile 'hola' al numero del bot para probar."
+  echo -e "${AZUL}CONFIGURA EL WEBHOOK EN META:${NC}"
+  echo "  developers.facebook.com -> tu app -> WhatsApp -> Configuracion"
+  echo ""
+  echo "  URL de devolucion de llamada:"
+  echo -e "${VERDE}     https://$DOMINIO:8443/webhook${NC}"
+  echo ""
+  echo "  Token de verificacion: el verify token que pusiste recien"
+  echo -e "${AMARILLO}  Despues toca 'Verificar y guardar' y suscribite al campo 'messages'${NC}"
+  echo ""
+  echo "Cuando termines, escribile 'hola' al numero del bot para probar."
   echo ""
   echo "  sshbot logs  -> ver mensajes    sshbot stop -> parar"
   echo "=================================================="
