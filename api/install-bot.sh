@@ -433,7 +433,7 @@ async function enviarDocumento(to, rutaArchivo, nombre) {
   try {
     const form = new FormData();
     form.append('messaging_product', 'whatsapp');
-    form.append('file', fs.createReadStream(rutaArchivo), { filename: nombre, contentType: 'application/octet-stream' });
+    form.append('file', fs.createReadStream(rutaArchivo), { filename: nombre, contentType: 'text/plain' });
     const up = await axios.post(`https://graph.facebook.com/v21.0/${PHONE_ID}/media`, form, {
       headers: { Authorization: `Bearer ${TOKEN}`, ...form.getHeaders() }
     });
