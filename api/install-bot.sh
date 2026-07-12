@@ -23,6 +23,47 @@ mkdir -p "$BOT_DIR" && cd "$BOT_DIR"
 echo "$TOKEN"    > .license
 echo "$API_BASE" > .apibase
 
+# ===== ELECCION DE CAPA DE MENSAJERIA =====
+echo ""
+echo "=================================================="
+echo "   CONEXION A WHATSAPP"
+echo "=================================================="
+echo "  Como queres conectar el bot a WhatsApp?"
+echo "    1) Baileys (escanear QR, gratis, mas simple)"
+echo "    2) API oficial de Meta (mas estable, con botones)"
+echo ""
+read -p "  Elegi 1 o 2: " CAPA_WPP < /dev/tty
+CAPA_WPP=$(echo "$CAPA_WPP" | tr -cd "0-9")
+if [ "$CAPA_WPP" != "2" ]; then CAPA_WPP="1"; fi
+echo "$CAPA_WPP" > "$BOT_DIR/capa-wpp.txt"
+
+if [ "$CAPA_WPP" = "2" ]; then
+  echo ""
+  echo "  --- Datos de la API oficial de Meta ---"
+  echo "  (Los obtenes en developers.facebook.com -> tu app -> WhatsApp)"
+  echo ""
+  read -p "  Dominio del webhook (ej: botssh.tudominio.com): " META_DOMINIO < /dev/tty
+  read -p "  Token de acceso (permanente): " META_TOKEN_IN < /dev/tty
+  read -p "  Phone Number ID: " META_PHONE_ID < /dev/tty
+  read -p "  WhatsApp Business Account ID (WABA): " META_WABA_ID < /dev/tty
+  echo "  Verify token: inventa una palabra secreta (la vas a poner tambien en Meta)"
+  read -p "  Verify token: " META_VERIFY < /dev/tty
+  read -p "  Tu numero de WhatsApp admin (ej: 549XXXXXXXXXX): " META_ADMIN < /dev/tty
+  META_ADMIN=$(echo "$META_ADMIN" | tr -cd "0-9")
+  # Guardar .env del bot Meta
+  cat > "$BOT_DIR/.env" <<METAENV
+META_TOKEN=$META_TOKEN_IN
+PHONE_NUMBER_ID=$META_PHONE_ID
+WABA_ID=$META_WABA_ID
+VERIFY_TOKEN=$META_VERIFY
+PORT=8090
+METAENV
+  chmod 600 "$BOT_DIR/.env"
+  echo "$META_DOMINIO" > "$BOT_DIR/dominio-webhook.txt"
+  echo "$META_ADMIN"   > "$BOT_DIR/admin.txt"
+  echo "  Datos de Meta guardados."
+fi
+
 echo ""
 echo "=================================================="
 echo "   METODO DE COBRO"
@@ -81,7 +122,7 @@ echo "Credenciales de cobro guardadas (archivos protegidos)."
 
 cat > package.json <<'PKG'
 { "name":"sshvendor-bot","version":"1.0.0","main":"index.js",
-  "dependencies":{"@whiskeysockets/baileys":"^6.7.9","@hapi/boom":"^10.0.1","qrcode-terminal":"^0.12.0","pino":"^9.5.0","axios":"^1.7.0"} }
+  "dependencies":{"@whiskeysockets/baileys":"^6.7.9","@hapi/boom":"^10.0.1","qrcode-terminal":"^0.12.0","pino":"^9.5.0","axios":"^1.7.0","express":"^4.21.0","dotenv":"^16.4.5","form-data":"^4.0.1"} }
 PKG
 
 cat > config.json <<'CFGJSON'
@@ -350,6 +391,482 @@ async function consultarOrden(referencia) {
 }
 module.exports = { crearOrden, consultarOrden };
 MPEOF
+
+cat > enviar.js <<'ENVIAREOF'
+require('dotenv').config();
+const axios = require('axios');
+const fs = require('fs');
+const FormData = require('form-data');
+const TOKEN = process.env.META_TOKEN;
+const PHONE_ID = process.env.PHONE_NUMBER_ID;
+const API = `https://graph.facebook.com/v21.0/${PHONE_ID}/messages`;
+function headers() { return { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }; }
+async function enviarTexto(to, texto) {
+  try {
+    await axios.post(API, { messaging_product: 'whatsapp', to, type: 'text', text: { body: texto } }, { headers: headers() });
+    return true;
+  } catch (e) { console.error('Error enviarTexto:', e.response ? JSON.stringify(e.response.data) : e.message); return false; }
+}
+async function enviarBotones(to, texto, botones) {
+  try {
+    await axios.post(API, {
+      messaging_product: 'whatsapp', to, type: 'interactive',
+      interactive: { type: 'button', body: { text: texto },
+        action: { buttons: botones.slice(0,3).map(b => ({ type: 'reply', reply: { id: b.id, title: b.titulo.slice(0,20) } })) } }
+    }, { headers: headers() });
+    return true;
+  } catch (e) { console.error('Error enviarBotones:', e.response ? JSON.stringify(e.response.data) : e.message); return false; }
+}
+async function enviarLista(to, texto, tituloBoton, opciones) {
+  try {
+    await axios.post(API, {
+      messaging_product: 'whatsapp', to, type: 'interactive',
+      interactive: { type: 'list', body: { text: texto },
+        action: { button: tituloBoton.slice(0,20), sections: [{ title: 'Opciones',
+          rows: opciones.slice(0,10).map(o => ({ id: o.id, title: o.titulo.slice(0,24), description: (o.descripcion||'').slice(0,72) })) }] } }
+    }, { headers: headers() });
+    return true;
+  } catch (e) { console.error('Error enviarLista:', e.response ? JSON.stringify(e.response.data) : e.message); return false; }
+}
+async function enviarDocumento(to, rutaArchivo, nombre) {
+  try {
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('file', fs.createReadStream(rutaArchivo), { filename: nombre, contentType: 'application/octet-stream' });
+    const up = await axios.post(`https://graph.facebook.com/v21.0/${PHONE_ID}/media`, form, {
+      headers: { Authorization: `Bearer ${TOKEN}`, ...form.getHeaders() }
+    });
+    const mediaId = up.data.id;
+    await axios.post(API, {
+      messaging_product: 'whatsapp', to, type: 'document',
+      document: { id: mediaId, filename: nombre }
+    }, { headers: headers() });
+    return true;
+  } catch (e) { console.error('Error enviarDocumento:', e.response ? JSON.stringify(e.response.data) : e.message); return false; }
+}
+async function enviarBotonURL(to, texto, textoBoton, url) {
+  try {
+    await axios.post(API, {
+      messaging_product: 'whatsapp', to, type: 'interactive',
+      interactive: { type: 'cta_url', body: { text: texto },
+        action: { name: 'cta_url', parameters: { display_text: textoBoton.slice(0,20), url: url } } }
+    }, { headers: headers() });
+    return true;
+  } catch (e) { console.error('Error enviarBotonURL:', e.response ? JSON.stringify(e.response.data) : e.message); return false; }
+}
+module.exports = { enviarTexto, enviarBotones, enviarLista, enviarDocumento, enviarBotonURL };
+ENVIAREOF
+
+cat > webhook.js <<'WEBHOOKEOF'
+require('dotenv').config();
+const express = require('express');
+const { procesarMensaje } = require('./bot');
+const app = express();
+app.use(express.json());
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const PORT = process.env.PORT || 8090;
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) { res.status(200).send(challenge); }
+  else { res.sendStatus(403); }
+});
+app.post('/webhook', async (req, res) => {
+  res.sendStatus(200);
+  try {
+    const entry = req.body.entry && req.body.entry[0];
+    const change = entry && entry.changes && entry.changes[0];
+    const value = change && change.value;
+    const mensaje = value && value.messages && value.messages[0];
+    if (!mensaje) return;
+    const from = mensaje.from;
+    let texto = '';
+    let botonId = null;
+    if (mensaje.type === 'text') { texto = mensaje.text.body; }
+    else if (mensaje.type === 'interactive') {
+      const inter = mensaje.interactive;
+      if (inter.type === 'button_reply') { botonId = inter.button_reply.id; texto = inter.button_reply.title; }
+      else if (inter.type === 'list_reply') { botonId = inter.list_reply.id; texto = inter.list_reply.title; }
+    } else if (mensaje.type === 'document') { texto = '__documento__'; }
+    await procesarMensaje({ from, texto, botonId, mensaje, value });
+  } catch (e) { console.error('Error webhook:', e.message); }
+});
+app.listen(PORT, () => console.log(`Bot Cloud API escuchando en puerto ${PORT}`));
+WEBHOOKEOF
+
+cat > bot.js <<'BOTJSEOF'
+require('dotenv').config();
+const fs = require('fs');
+const axios = require('axios');
+const { enviarTexto, enviarBotones, enviarLista, enviarDocumento, enviarBotonURL } = require('./enviar');
+const admrufu = require('./admrufu');
+const uala = require('./uala');
+const mercadopago = require('./mercadopago');
+
+const DIR = __dirname;
+let METODO_PAGO = '1';
+try { METODO_PAGO = fs.readFileSync(DIR + '/metodo-pago.txt', 'utf8').trim() || '1'; } catch (e) {}
+
+const CFG = JSON.parse(fs.readFileSync(DIR + '/config.json', 'utf8'));
+const VENTAS_FILE = DIR + '/ventas.json';
+const CLIENTES_FILE = DIR + '/clientes.json';
+
+const TOKEN = process.env.META_TOKEN;
+const PHONE_ID = process.env.PHONE_NUMBER_ID;
+
+function cargarVentas() {
+  try { return JSON.parse(fs.readFileSync(VENTAS_FILE, 'utf8')); }
+  catch { return { ordenes: {}, procesadas: {} }; }
+}
+function guardarVentas(v) { fs.writeFileSync(VENTAS_FILE, JSON.stringify(v, null, 2)); }
+let VENTAS = cargarVentas();
+
+function cargarClientes() {
+  try { return JSON.parse(fs.readFileSync(CLIENTES_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function guardarClientes(c) { fs.writeFileSync(CLIENTES_FILE, JSON.stringify(c, null, 2)); }
+let CLIENTES = cargarClientes();
+
+const sesiones = {};
+
+function planPorId(id) { return CFG.planes.find(p => String(p.id) === String(id).trim()); }
+function generarUsuario() { return `user${Math.floor(1000 + Math.random() * 9000)}`; }
+
+function formatDatos(mb) {
+  if (mb >= 1024 && mb % 1024 === 0) return (mb / 1024) + ' GB';
+  if (mb >= 1024) return (Math.round((mb / 1024) * 100) / 100) + ' GB';
+  return Math.round(mb) + ' MB';
+}
+
+function guardarConfig() { fs.writeFileSync(DIR + '/config.json', JSON.stringify(CFG, null, 2)); }
+
+async function enviarMenuPlanes(to) {
+  const opciones = CFG.planes.map(p => ({
+    id: 'plan_' + p.id,
+    titulo: p.nombre,
+    descripcion: CFG.moneda + p.precio
+  }));
+  await enviarLista(to, `🛒 *${CFG.negocio}*\n\nElegí tu paquete de datos:`, 'Ver planes', opciones);
+}
+
+async function iniciarPago(to, plan, hwid) {
+  if (METODO_PAGO === '3') {
+    sesiones[to] = { paso: 'eligiendo_pasarela', plan, hwid: hwid || null };
+    await enviarBotones(to, '💳 ¿Cómo querés pagar?', [
+      { id: 'pas_uala', titulo: 'Ualá Bis' },
+      { id: 'pas_mp', titulo: 'Mercado Pago' }
+    ]);
+    return;
+  }
+  await generarLinkPago(to, plan, hwid);
+}
+
+async function generarLinkPago(to, plan, hwid, pasarela) {
+  try {
+    await enviarTexto(to, '⏳ Generando tu link de pago, esperá un momento...');
+    const ref = `${to}-${Date.now()}`;
+    const pas = pasarela || (METODO_PAGO === '2' ? 'mp' : 'uala');
+    const modulo = pas === 'mp' ? mercadopago : uala;
+    const orden = await modulo.crearOrden(plan.precio, `${plan.nombre} - ${CFG.negocio}`, ref);
+    VENTAS.ordenes[orden.uuid] = { jid: to, plan_id: plan.id, mb: plan.mb, precio: plan.precio, uuid: orden.uuid, ref, creada: Date.now(), estado: 'pendiente', hwid: hwid || null, pasarela: pas };
+    guardarVentas(VENTAS);
+    sesiones[to] = { paso: 'pagando', uuid: orden.uuid };
+    await enviarBotonURL(to, `💳 *${plan.nombre}* — ${CFG.moneda}${plan.precio}\n\nTocá el botón para pagar de forma segura.\n\nApenas completes el pago, te activo los datos automáticamente. ⏳`, '💳 Pagar ahora', orden.checkout_link);
+  } catch (e) {
+    console.error('Error creando orden:', e.message);
+    await enviarTexto(to, '❌ Hubo un error generando el pago. Probá de nuevo en un momento.');
+  }
+}
+
+async function entregarCompra(o, hwidRecibido) {
+  const to = o.jid;
+  const clienteExistente = CLIENTES[to];
+  const usarHwidAhora = !!(hwidRecibido || (clienteExistente && clienteExistente.hwid));
+
+  if (usarHwidAhora) {
+    if (clienteExistente && clienteExistente.hwid) {
+      const r = await admrufu.recargarHwid(clienteExistente.hwid, o.mb);
+      if (r.success) {
+        CLIENTES[to].mb = (CLIENTES[to].mb || 0) + o.mb;
+        guardarClientes(CLIENTES);
+        await enviarTexto(to, `✅ *¡Recarga confirmada!*\n\n📊 *Datos agregados:* ${formatDatos(o.mb)}\n📅 *Validez renovada:* ${r.dias} días\n\n¡Gracias! 🚀`);
+        return true;
+      } else {
+        await enviarTexto(to, '⚠️ Tu pago se confirmó pero hubo un problema con la recarga. Contactá al soporte.');
+        return false;
+      }
+    } else {
+      const nombre = generarUsuario();
+      const r = await admrufu.crearCuentaHwid(hwidRecibido, nombre, o.mb);
+      if (r.success) {
+        CLIENTES[to] = { hwid: hwidRecibido, nombre, mb: o.mb };
+        guardarClientes(CLIENTES);
+        await enviarTexto(to, `✅ *¡Cuenta activada!*\n\n📊 *Datos:* ${formatDatos(o.mb)}\n📅 *Validez:* ${CFG.dias_cuenta} días\n\n📲 Pedí tu archivo de configuración escribiendo el comando */hc*\n\n¡Gracias por tu compra! 🚀`);
+        return true;
+      } else {
+        await enviarTexto(to, '⚠️ Tu pago se confirmó pero hubo un problema activando tu cuenta. Contactá al soporte.');
+        console.error('Error HWID:', r.error);
+        return false;
+      }
+    }
+  } else {
+    if (clienteExistente && clienteExistente.usuario) {
+      const r = await admrufu.recargarDatos(clienteExistente.usuario, o.mb);
+      if (r.success) {
+        CLIENTES[to].mb = (CLIENTES[to].mb || 0) + o.mb;
+        guardarClientes(CLIENTES);
+        await enviarTexto(to, `✅ *¡Recarga confirmada!*\n\n👤 *Usuario:* ${clienteExistente.usuario}\n📊 *Datos agregados:* ${formatDatos(o.mb)}\n📅 *Validez renovada:* ${r.dias} días\n\n¡Gracias! 🚀`);
+        return true;
+      } else {
+        await enviarTexto(to, '⚠️ Tu pago se confirmó pero hubo un problema con la recarga. Contactá al soporte.');
+        return false;
+      }
+    } else {
+      const usuario = generarUsuario();
+      const r = await admrufu.crearCuentaDatos(usuario, o.mb);
+      if (r.success) {
+        CLIENTES[to] = { usuario: r.user, mb: o.mb };
+        guardarClientes(CLIENTES);
+        await enviarTexto(to, `✅ *¡Pago confirmado!* Tu cuenta está lista:\n\n👤 *Usuario:* ${r.user}\n🔑 *Contraseña:* ${r.password}\n📊 *Datos:* ${formatDatos(o.mb)}\n📅 *Validez:* ${CFG.dias_cuenta} días\n\n¡Gracias por tu compra! 🚀`);
+        return true;
+      } else {
+        await enviarTexto(to, '⚠️ Tu pago se confirmó pero hubo un problema creando la cuenta. Contactá al soporte.');
+        console.error('Error ADMRufu:', r.error);
+        return false;
+      }
+    }
+  }
+}
+
+async function descargarMedia(mediaId) {
+  const meta = await axios.get(`https://graph.facebook.com/v21.0/${mediaId}`, {
+    headers: { Authorization: `Bearer ${TOKEN}` }
+  });
+  const url = meta.data.url;
+  const bin = await axios.get(url, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+    responseType: 'arraybuffer'
+  });
+  return Buffer.from(bin.data);
+}
+
+async function procesarMensaje({ from, texto, botonId, mensaje, value }) {
+  const to = from;
+  const t = (texto || '').toLowerCase().trim();
+
+  if (mensaje && mensaje.type === 'document') {
+    let ADMIN_NUM = '';
+    try { ADMIN_NUM = fs.readFileSync(DIR + '/admin.txt', 'utf8').trim(); } catch (e) {}
+    if (ADMIN_NUM && from === ADMIN_NUM) {
+      const doc = mensaje.document;
+      const nombreArch = doc.filename || ('archivo_' + Date.now() + '.hc');
+      if (nombreArch.toLowerCase().endsWith('.hc')) {
+        try {
+          const buffer = await descargarMedia(doc.id);
+          if (!fs.existsSync(DIR + '/hc_files')) fs.mkdirSync(DIR + '/hc_files');
+          fs.writeFileSync(DIR + '/hc_files/' + nombreArch, buffer);
+          await enviarTexto(to, `✅ Archivo *${nombreArch}* guardado. Los compradores lo reciben con /hc`);
+        } catch (e) {
+          await enviarTexto(to, '❌ Error guardando el archivo: ' + e.message);
+        }
+      } else {
+        await enviarTexto(to, '⚠️ Solo se aceptan archivos .hc');
+      }
+      return;
+    }
+    return;
+  }
+
+  let ADMIN_NUM = '';
+  try { ADMIN_NUM = fs.readFileSync(DIR + '/admin.txt', 'utf8').trim(); } catch (e) {}
+  const esAdmin = ADMIN_NUM && from === ADMIN_NUM;
+
+  if (esAdmin && t.startsWith('/') && t !== '/hc') {
+    if (t === '/config' || t === '/admin' || t === '/ayuda') {
+      let txt = '⚙️ *PANEL DE CONFIGURACION*\n\n';
+      txt += `🏪 Negocio: *${CFG.negocio}*\n`;
+      txt += `📅 Dias por cuenta: *${CFG.dias_cuenta}*\n`;
+      txt += `🔌 Conexiones: *${CFG.conexiones_por_cuenta}*\n\n`;
+      txt += '📦 *PLANES:*\n';
+      CFG.planes.forEach(p => { txt += `  *${p.id}.* ${p.nombre} — ${CFG.moneda}${p.precio}\n`; });
+      txt += '\n📝 *COMANDOS:*\n';
+      txt += '`/precio [id] [valor]`\n`/nombre [id] [texto]`\n`/agregarplan [cant] [GB/MB] [precio]`\n`/borrarplan [id]`\n`/dias [numero]`\n`/negocio [texto]`\n`/mensaje [texto]`\n`/borrarhc`';
+      await enviarTexto(to, txt);
+      return;
+    }
+    if (t.startsWith('/precio')) {
+      const p = texto.split(/\s+/); const plan = planPorId(p[1]); const v = parseInt(p[2]);
+      if (!plan || isNaN(v)) { await enviarTexto(to, '❌ Uso: /precio [id] [valor]\nEj: /precio 1 3000'); return; }
+      plan.precio = v; guardarConfig();
+      await enviarTexto(to, `✅ Precio de *${plan.nombre}* ahora es ${CFG.moneda}${v}`); return;
+    }
+    if (t.startsWith('/nombre')) {
+      const p = texto.split(/\s+/); const plan = planPorId(p[1]); const nom = p.slice(2).join(' ');
+      if (!plan || !nom) { await enviarTexto(to, '❌ Uso: /nombre [id] [texto]'); return; }
+      plan.nombre = nom; guardarConfig();
+      await enviarTexto(to, `✅ Nombre del plan ${p[1]} ahora es *${nom}*`); return;
+    }
+    if (t.startsWith('/agregarplan')) {
+      const p = texto.split(/\s+/);
+      const cantidad = parseFloat(p[1]);
+      const unidad = (p[2] || '').toUpperCase();
+      const precio = parseInt(p[3]);
+      if (isNaN(cantidad) || (unidad !== 'GB' && unidad !== 'MB') || isNaN(precio)) {
+        await enviarTexto(to, 'Uso: /agregarplan [cantidad] [GB/MB] [precio]\nEj: /agregarplan 100 MB 500\nEj: /agregarplan 10 GB 5000'); return;
+      }
+      const mbTotal = unidad === 'GB' ? Math.round(cantidad * 1024) : Math.round(cantidad);
+      const nombre = cantidad + ' ' + unidad;
+      const nuevoId = CFG.planes.length ? Math.max(...CFG.planes.map(p => p.id)) + 1 : 1;
+      CFG.planes.push({ id: nuevoId, nombre: nombre, mb: mbTotal, precio: precio });
+      guardarConfig();
+      await enviarTexto(to, 'Plan agregado:\n' + nuevoId + '. ' + nombre + ' - ' + CFG.moneda + precio); return;
+    }
+    if (t.startsWith('/borrarplan')) {
+      const p = texto.split(/\s+/);
+      const id = parseInt(p[1]);
+      const idx = CFG.planes.findIndex(pl => pl.id === id);
+      if (isNaN(id) || idx === -1) { await enviarTexto(to, 'Uso: /borrarplan [id]\nUsa /config para ver los ids.'); return; }
+      const borrado = CFG.planes.splice(idx, 1)[0];
+      guardarConfig();
+      await enviarTexto(to, 'Plan borrado: ' + borrado.nombre); return;
+    }
+    if (t.startsWith('/dias')) {
+      const p = texto.split(/\s+/); const d = parseInt(p[1]);
+      if (isNaN(d)) { await enviarTexto(to, '❌ Uso: /dias [numero]'); return; }
+      CFG.dias_cuenta = d; guardarConfig();
+      await enviarTexto(to, `✅ Dias por cuenta ahora es *${d}*`); return;
+    }
+    if (t.startsWith('/negocio')) {
+      const nv = texto.split(/\s+/).slice(1).join(' ');
+      if (!nv) { await enviarTexto(to, '❌ Uso: /negocio [texto]'); return; }
+      CFG.negocio = nv; guardarConfig();
+      await enviarTexto(to, `✅ Negocio ahora es *${nv}*`); return;
+    }
+    if (t.startsWith('/mensaje')) {
+      const nv = texto.split(/\s+/).slice(1).join(' ');
+      if (!nv) { await enviarTexto(to, '❌ Uso: /mensaje [texto]'); return; }
+      CFG.mensaje_bienvenida = nv; guardarConfig();
+      await enviarTexto(to, `✅ Mensaje de bienvenida actualizado`); return;
+    }
+    if (t === '/borrarhc') {
+      try {
+        const dir = DIR + '/hc_files';
+        let n = 0;
+        if (fs.existsSync(dir)) { for (const f of fs.readdirSync(dir)) { fs.unlinkSync(dir + '/' + f); n++; } }
+        await enviarTexto(to, `🗑️ Se borraron ${n} archivo(s) .hc. Ya podés subir los nuevos.`);
+      } catch (e) { await enviarTexto(to, '❌ Error al borrar: ' + e.message); }
+      return;
+    }
+    await enviarTexto(to, 'Comando no reconocido. Escribí /config para ver opciones.'); return;
+  }
+
+  if (t === '/hc') {
+    const dir = DIR + '/hc_files';
+    let archivos = [];
+    try { if (fs.existsSync(dir)) archivos = fs.readdirSync(dir).filter(f => f.toLowerCase().endsWith('.hc')); } catch (e) {}
+    if (archivos.length === 0) {
+      await enviarTexto(to, 'ℹ️ Todavía no hay archivos de configuración disponibles.');
+      return;
+    }
+    await enviarTexto(to, `📲 Te envío ${archivos.length} archivo(s) de configuración:`);
+    for (const nombre of archivos) {
+      try { await enviarDocumento(to, dir + '/' + nombre, nombre); }
+      catch (e) { console.error('Error enviando hc:', e.message); }
+    }
+    return;
+  }
+
+  if (botonId) { return await manejarBoton(to, botonId); }
+
+  if (t === 'hola' || t === 'menu' || t === 'comprar' || t === 'inicio' || t === 'recargar') {
+    await enviarMenuPlanes(to);
+    return;
+  }
+
+  const ses = sesiones[to];
+  if (ses && ses.paso === 'hwid_antes_pago') {
+    const hwid = texto.trim();
+    if (!admrufu.validarHwid(hwid)) {
+      await enviarTexto(to, '❌ Ese HWID no parece válido. Tiene que ser un código de 32 caracteres. Abrí HTTP Custom → menú → HWID, copialo y pegalo acá.');
+      return;
+    }
+    await iniciarPago(to, ses.plan, hwid);
+    return;
+  }
+
+  await enviarTexto(to, CFG.mensaje_bienvenida);
+}
+
+async function manejarBoton(to, botonId) {
+  if (botonId.startsWith('plan_')) {
+    const id = botonId.replace('plan_', '');
+    const plan = planPorId(id);
+    if (!plan) { await enviarTexto(to, '❌ Ese plan ya no está disponible.'); return; }
+    const clienteExistente = CLIENTES[to];
+    if (clienteExistente && clienteExistente.hwid) { await iniciarPago(to, plan, clienteExistente.hwid); return; }
+    if (clienteExistente && clienteExistente.usuario) { await iniciarPago(to, plan, null); return; }
+    sesiones[to] = { paso: 'eligiendo_modo', plan };
+    await enviarBotones(to, '📦 ¿Cómo querés tu cuenta?', [
+      { id: 'modo_userpass', titulo: 'Usuario y clave' },
+      { id: 'modo_hwid', titulo: 'HWID' }
+    ]);
+    return;
+  }
+  if (botonId === 'modo_userpass') {
+    const ses = sesiones[to];
+    if (!ses || !ses.plan) { await enviarMenuPlanes(to); return; }
+    await iniciarPago(to, ses.plan, null);
+    return;
+  }
+  if (botonId === 'modo_hwid') {
+    const ses = sesiones[to];
+    if (!ses || !ses.plan) { await enviarMenuPlanes(to); return; }
+    sesiones[to] = { paso: 'hwid_antes_pago', plan: ses.plan };
+    await enviarTexto(to, '📲 Necesito tu *HWID* para activar tu cuenta:\n\n1. Abrí HTTP Custom\n2. Andá al menú HWID\n3. Copialo y pegalo acá 👇');
+    return;
+  }
+  if (botonId === 'pas_uala') {
+    const ses = sesiones[to];
+    if (!ses || !ses.plan) { await enviarMenuPlanes(to); return; }
+    await generarLinkPago(to, ses.plan, ses.hwid, 'uala');
+    return;
+  }
+  if (botonId === 'pas_mp') {
+    const ses = sesiones[to];
+    if (!ses || !ses.plan) { await enviarMenuPlanes(to); return; }
+    await generarLinkPago(to, ses.plan, ses.hwid, 'mp');
+    return;
+  }
+  await enviarTexto(to, 'Opción no reconocida. Escribí *comprar* para empezar.');
+}
+
+setInterval(async () => {
+  const pendientes = Object.values(VENTAS.ordenes).filter(o => o.estado === 'pendiente');
+  for (const o of pendientes) {
+    if (Date.now() - o.creada > 30 * 60 * 1000) { o.estado = 'expirada'; guardarVentas(VENTAS); continue; }
+    try {
+      const moduloVerif = (o.pasarela === 'mp') ? mercadopago : uala;
+      const idConsulta = (o.pasarela === 'mp') ? o.ref : o.uuid;
+      const status = await moduloVerif.consultarOrden(idConsulta);
+      if (status === 'APPROVED') {
+        if (VENTAS.procesadas[o.uuid]) { o.estado = 'procesada'; guardarVentas(VENTAS); continue; }
+        const clienteExistente = CLIENTES[o.jid];
+        const hwidParaUsar = o.hwid || (clienteExistente && clienteExistente.hwid) || null;
+        const entregado = await entregarCompra(o, hwidParaUsar);
+        if (entregado) { VENTAS.procesadas[o.uuid] = true; o.estado = 'procesada'; guardarVentas(VENTAS); }
+        else { console.error('Entrega falló, se reintentará:', o.uuid); }
+      } else if (status === 'REJECTED') {
+        o.estado = 'rechazada'; guardarVentas(VENTAS);
+        await enviarTexto(o.jid, '❌ Tu pago fue rechazado. Podés intentar de nuevo escribiendo *comprar*.');
+      }
+    } catch (e) {}
+  }
+}, 20000);
+
+module.exports = { procesarMensaje };
+BOTJSEOF
 
 cat > index.js <<'INDEXEOF'
 const fs = require('fs'), path = require('path');
@@ -852,15 +1369,63 @@ if [ "$1" = "pago" ]; then
   echo "Metodo de cobro configurado y bot reiniciado."
   exit 0
 fi
-if [ "$1" = "fondo" ]; then pm2 start index.js --name sshvendor-bot && pm2 save && pm2 startup systemd -u root --hp /root >/dev/null 2>&1; exit 0; fi
+if [ "$1" = "fondo" ]; then
+  CAPA=$(cat "$BOT_DIR/capa-wpp.txt" 2>/dev/null || echo "1")
+  if [ "$CAPA" = "2" ]; then ARRANQUE="webhook.js"; else ARRANQUE="index.js"; fi
+  pm2 start "$BOT_DIR/$ARRANQUE" --name sshvendor-bot && pm2 save && pm2 startup systemd -u root --hp /root >/dev/null 2>&1; exit 0;
+fi
 if [ "$1" = "stop" ]; then pm2 stop sshvendor-bot; exit 0; fi
 if [ "$1" = "logs" ]; then pm2 logs sshvendor-bot; exit 0; fi
-exec node index.js
+CAPA=$(cat "$BOT_DIR/capa-wpp.txt" 2>/dev/null || echo "1")
+if [ "$CAPA" = "2" ]; then exec node "$BOT_DIR/webhook.js"; else exec node "$BOT_DIR/index.js"; fi
 SSHBOTCMD
 chmod +x /usr/local/bin/sshbot
 
 echo "==> Instalando librerias de Node (puede tardar)..."
 npm install --no-audit --no-fund >/dev/null 2>&1
+
+if [ "$CAPA_WPP" = "2" ]; then
+  echo "==> Configurando webhook con SSL para la API de Meta..."
+  DOMINIO=$(cat "$BOT_DIR/dominio-webhook.txt")
+  apt-get install -y nginx certbot python3-certbot-nginx >/dev/null 2>&1 || true
+  cat > /etc/nginx/sites-available/sshbot-meta <<NGINXEOF
+server {
+    listen 80;
+    server_name $DOMINIO;
+    location / {
+        proxy_pass http://127.0.0.1:8090;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+NGINXEOF
+  ln -sf /etc/nginx/sites-available/sshbot-meta /etc/nginx/sites-enabled/
+  nginx -t >/dev/null 2>&1 && systemctl reload nginx
+  certbot --nginx -d "$DOMINIO" --non-interactive --agree-tos -m admin@"$DOMINIO" --redirect >/dev/null 2>&1
+  systemctl reload nginx
+  pm2 delete sshvendor-bot >/dev/null 2>&1 || true
+  pm2 start "$BOT_DIR/webhook.js" --name sshvendor-bot && pm2 save >/dev/null 2>&1
+  pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
+  echo ""
+  echo "=================================================="
+  echo "   INSTALACION COMPLETA (API de Meta)"
+  echo "=================================================="
+  echo ""
+  echo "El bot ya esta corriendo con la API oficial de Meta."
+  echo ""
+  echo "CONFIGURA EL WEBHOOK EN META:"
+  echo "  URL: https://$DOMINIO/webhook"
+  echo "  Verify token: el que pusiste recien"
+  echo "  Suscribite al campo 'messages'"
+  echo ""
+  echo "Despues escribile 'hola' al numero del bot para probar."
+  echo ""
+  echo "  sshbot logs  -> ver mensajes    sshbot stop -> parar"
+  echo "=================================================="
+  exit 0
+fi
 
 echo ""
 echo "=================================================="
